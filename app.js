@@ -560,7 +560,14 @@
 
         const pvpFlipEl = document.getElementById("pvp-flip");
         const pvpAutoFlip = !!(pvpFlipEl && pvpFlipEl.checked);
-        const isFlipped = botEnabled
+        // En partidas de torneo cada jugador está en su propia pantalla,
+        // así que el tablero NO debe rotar cuando cambia el turno (eso
+        // solo tiene sentido en "pasar y jugar" local). Se fija según el
+        // color con el que juega la persona (blancas abajo si juega
+        // blancas, negras abajo si juega negras; espectadores ven blancas abajo).
+        const isFlipped = tournamentMatchActive
+          ? tournamentMyColor() === "b"
+          : botEnabled
           ? botColor === "w"
           : (pvpAutoFlip && turn === "b");
         const rows = isFlipped ? [7, 6, 5, 4, 3, 2, 1, 0] : [0, 1, 2, 3, 4, 5, 6, 7];
@@ -4138,6 +4145,26 @@
       let tournamentMatchActive = false;
       let tournamentMatchCtx = null; // {round, board, whiteName, blackName, whiteEmail, blackEmail}
       let tournamentMatchBusy = false;
+      let tournamentResultShown = false; // evita mostrar el popup de fin de partida más de una vez
+
+      // Arma el texto del popup de fin de partida de torneo a partir del
+      // resultado (1-0 / 0-1 / 1/2-1/2), aclarando si ganó/perdió/empató
+      // quien está mirando la pantalla.
+      function tournamentResultMessage(result) {
+        const ctx = tournamentMatchCtx;
+        const whiteName = ctx ? ctx.whiteName : "Blancas";
+        const blackName = ctx ? ctx.blackName : "Negras";
+        let text;
+        if (result === "1-0") text = `♚ ¡Jaque mate o abandono! Ganaron las Blancas (${whiteName}).`;
+        else if (result === "0-1") text = `♚ ¡Jaque mate o abandono! Ganaron las Negras (${blackName}).`;
+        else if (result === "1/2-1/2") text = "🤝 Partida de torneo terminada en tablas.";
+        else return "🏁 Partida de torneo terminada.";
+
+        const myColor = tournamentMyColor();
+        if (myColor === "w") text += result === "1-0" ? " ¡Ganaste vos!" : result === "0-1" ? " Perdiste esta." : "";
+        if (myColor === "b") text += result === "0-1" ? " ¡Ganaste vos!" : result === "1-0" ? " Perdiste esta." : "";
+        return text;
+      }
 
       function tournamentMyColor() {
         if (!tournamentMatchCtx || !currentUser) return "";
@@ -4155,6 +4182,13 @@
           statusEl.textContent = "🏁 Partida terminada.";
           document.getElementById("tournament-match-controls").style.display = "none";
           document.getElementById("tournament-match-spectator-note").style.display = "none";
+          if (!tournamentResultShown) {
+            tournamentResultShown = true;
+            const pairing = (lastTournamentState && lastTournamentState.pairings || []).find(
+              (p) => p.round === gameRow.round && p.board === gameRow.board
+            );
+            showAlert(tournamentResultMessage(pairing ? pairing.result : ""));
+          }
           return;
         }
         const turn = game.turn();
@@ -4210,14 +4244,22 @@
           game.load(gameRow.fen);
           selected = null;
           validMoves = [];
+          tournamentResultShown = false;
 
           showPage("jugar");
 
           document.getElementById("tournament-match-bar").style.display = "";
           document.getElementById("tournament-match-title").textContent =
             `🏆 Torneo · Ronda ${round}, tablero #${board}: ${whiteName} vs ${blackName}`;
-          const controlsPanel = document.querySelector("#page-jugar .controls-panel");
-          if (controlsPanel) controlsPanel.style.display = "none";
+          // Se ocultan los botones que no aplican a una partida de torneo
+          // (iniciar partida nueva, deshacer, rendirse "normal" y copiar
+          // partida, ya que el torneo tiene sus propios botones de
+          // rendirse/tablas), pero se deja "Pantalla completa" visible
+          // para poder jugar la partida de torneo a pantalla completa.
+          ["new-game", "undo", "resign", "copy-game"].forEach((id) => {
+            const el = document.getElementById(id);
+            if (el) el.style.display = "none";
+          });
           const clockEl = document.querySelector("#page-jugar .clock");
           if (clockEl) clockEl.style.display = "none";
 
@@ -4249,11 +4291,14 @@
       function exitTournamentMatch() {
         tournamentMatchActive = false;
         tournamentMatchCtx = null;
+        tournamentResultShown = false;
         clearOpponentMoveHighlight();
 
         document.getElementById("tournament-match-bar").style.display = "none";
-        const controlsPanel = document.querySelector("#page-jugar .controls-panel");
-        if (controlsPanel) controlsPanel.style.display = "";
+        ["new-game", "undo", "resign", "copy-game"].forEach((id) => {
+          const el = document.getElementById(id);
+          if (el) el.style.display = "";
+        });
         const clockEl = document.querySelector("#page-jugar .clock");
         if (clockEl) clockEl.style.display = "";
 
@@ -4262,7 +4307,7 @@
           if (el) el.style.display = "";
         });
 
-        game = new Chess();
+        game.reset();
         gameStarted = false;
         selected = null;
         validMoves = [];
@@ -4295,10 +4340,14 @@
           const gameRow = (state.games || []).find(
             (g) => g.round === tournamentMatchCtx.round && g.board === tournamentMatchCtx.board
           );
-          updateTournamentMatchBar(gameRow);
-          if (gameOverResult) {
-            toast("🏁 Partida de torneo terminada: " + resultLabel(gameOverResult));
+          if (gameOverResult && !tournamentResultShown) {
+            // Se conoce el resultado exacto ya mismo (no hace falta esperar
+            // a que llegue el próximo snapshot de Firestore), así que se
+            // muestra el popup de una: funciona también a pantalla completa.
+            tournamentResultShown = true;
+            showAlert(tournamentResultMessage(gameOverResult));
           }
+          updateTournamentMatchBar(gameRow);
         } catch (err) {
           toast("❌ No se pudo sincronizar la jugada: " + err.message);
         } finally {
@@ -4324,6 +4373,10 @@
           const gameRow = (state.games || []).find(
             (g) => g.round === tournamentMatchCtx.round && g.board === tournamentMatchCtx.board
           );
+          if (!tournamentResultShown) {
+            tournamentResultShown = true;
+            showAlert(tournamentResultMessage(myColor === "w" ? "0-1" : "1-0"));
+          }
           updateTournamentMatchBar(gameRow);
           toast("🏳️ Te rendiste. Resultado cargado.");
         } catch (err) {
@@ -4348,6 +4401,10 @@
           const gameRow = (state.games || []).find(
             (g) => g.round === tournamentMatchCtx.round && g.board === tournamentMatchCtx.board
           );
+          if (!tournamentResultShown) {
+            tournamentResultShown = true;
+            showAlert(tournamentResultMessage("1/2-1/2"));
+          }
           updateTournamentMatchBar(gameRow);
           toast("🤝 Tablas cargadas.");
         } catch (err) {
