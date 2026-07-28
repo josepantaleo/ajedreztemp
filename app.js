@@ -53,7 +53,10 @@
         toastTimer = setTimeout(() => el.classList.remove("show"), 2200);
       }
 
-      function showAlert(text) {
+      function showAlert(text, variant) {
+        const box = document.getElementById("alert-box");
+        box.classList.remove("result-win", "result-loss", "result-draw");
+        if (variant) box.classList.add("result-" + variant);
         document.getElementById("alert-box-text").textContent = text;
         document.getElementById("alert-analyze-btn").style.display = "none";
         document.getElementById("alert").classList.add("show");
@@ -398,6 +401,9 @@
       let tournamentMatchCtx = null; // {round, board, whiteName, blackName, whiteEmail, blackEmail}
       let tournamentMatchBusy = false;
       let tournamentResultShown = false; // evita mostrar el popup de fin de partida más de una vez
+      let tournamentClockTimer = null; // interval del reloj visual de la partida de torneo abierta
+      let tournamentCurrentGameRow = null; // última fila de "games" conocida para la partida abierta
+      let tournamentTimeoutClaimBusy = false; // evita reclamar la bandera caída más de una vez a la vez
 
       function animateMoveTransition(board, anim, movedPieceEl, capturedSquareEl) {
         const fromEl = anim.from ? board.querySelector(`[data-square="${anim.from}"]`) : null;
@@ -566,9 +572,12 @@
         board.innerHTML = "";
         const isCheck = game.in_check();
         const turn = game.turn();
-        const threatsEnabled = document.getElementById("toggle-threats")
-          ? document.getElementById("toggle-threats").checked
-          : showThreats;
+        // En una partida de torneo no se resaltan amenazas ni se explican
+        // jugadas (esas ayudas son solo para practicar/estudiar), aunque el
+        // checkbox haya quedado marcado de una sesión anterior.
+        const threatsEnabled =
+          !tournamentMatchActive &&
+          (document.getElementById("toggle-threats") ? document.getElementById("toggle-threats").checked : showThreats);
         const threatenedSquares = threatsEnabled ? getThreatenedSquares(game.fen()) : null;
 
         const pvpFlipEl = document.getElementById("pvp-flip");
@@ -1055,21 +1064,82 @@
       let clock = { w: 300, b: 300 };
       let clockEnabled = false;
 
-      function getInitialTime() {
-        const mode = document.getElementById("time-mode").value;
+      // Lee minutos/incremento personalizables a partir de un par
+      // select+input (se reutiliza para el reloj de "Jugar" y para el
+      // reloj configurable del torneo).
+      function getRawMinutesFromSelect(selectId, customInputId) {
+        const el = document.getElementById(selectId);
+        if (!el) return 0;
+        const mode = el.value;
         if (mode === "none") return 0;
         if (mode === "custom") {
-          return Math.max(1, Number(document.getElementById("custom-minutes").value) || 5) * 60;
+          const customEl = document.getElementById(customInputId);
+          return Math.max(1, Number(customEl && customEl.value) || 5);
         }
-        return Number(mode) * 60;
+        return Number(mode);
+      }
+
+      function getMinutesFromSelect(selectId, customInputId) {
+        return getRawMinutesFromSelect(selectId, customInputId) * 60;
+      }
+
+      // Setea un select de tiempo/incremento (y su input personalizado) a
+      // partir de un valor guardado, eligiendo la opción preestablecida que
+      // coincida o "Personalizado" si no hay ninguna igual.
+      function setSelectFromValue(selectId, customLabelId, customInputId, value, presetValues) {
+        const select = document.getElementById(selectId);
+        if (!select) return;
+        const str = String(value || 0);
+        if (!value && presetValues[0] === "none") {
+          select.value = "none";
+        } else if (presetValues.indexOf(str) !== -1) {
+          select.value = str;
+        } else {
+          select.value = "custom";
+          const customEl = document.getElementById(customInputId);
+          if (customEl) customEl.value = value;
+        }
+        const labelEl = document.getElementById(customLabelId);
+        if (labelEl) labelEl.style.display = select.value === "custom" ? "" : "none";
+      }
+
+      function getIncrementFromSelect(selectId, customInputId) {
+        const el = document.getElementById(selectId);
+        if (!el) return 0;
+        const value = el.value;
+        if (value === "custom") {
+          const customEl = document.getElementById(customInputId);
+          return Math.max(0, Number(customEl && customEl.value) || 0);
+        }
+        return Number(value);
+      }
+
+      // Muestra/oculta el campo "personalizado" de un select de tiempo o
+      // incremento apenas se elige la opción "custom".
+      function wireCustomToggle(selectId, customLabelId) {
+        const selectEl = document.getElementById(selectId);
+        const labelEl = document.getElementById(customLabelId);
+        if (!selectEl || !labelEl) return;
+        const sync = () => {
+          labelEl.style.display = selectEl.value === "custom" ? "" : "none";
+        };
+        selectEl.addEventListener("change", sync);
+        sync();
+      }
+
+      wireCustomToggle("time-mode", "custom-time-label");
+      wireCustomToggle("increment", "custom-increment-label");
+      wireCustomToggle("tournament-time-mode", "tournament-custom-time-label");
+      wireCustomToggle("tournament-increment", "tournament-custom-increment-label");
+      wireCustomToggle("tournament-settings-time-mode", "tournament-settings-custom-time-label");
+      wireCustomToggle("tournament-settings-increment", "tournament-settings-custom-increment-label");
+
+      function getInitialTime() {
+        return getMinutesFromSelect("time-mode", "custom-minutes");
       }
 
       function getIncrement() {
-        const value = document.getElementById("increment").value;
-        if (value === "custom") {
-          return Math.max(0, Number(document.getElementById("custom-increment").value) || 0);
-        }
-        return Number(value);
+        return getIncrementFromSelect("increment", "custom-increment");
       }
 
       function addIncrement() {
@@ -2188,6 +2258,7 @@
       }
 
       function showMoveExplanation(fenBefore, mv) {
+        if (tournamentMatchActive) return; // sin explicaciones en partidas de torneo
         if (!explainMode || !mv) return;
         if (!shouldExplainMover(mv.color)) return;
 
@@ -3518,11 +3589,22 @@
       }
 
       function normalizeTournamentState(data) {
+        const defaults = {
+          name: "",
+          round: 0,
+          status: "setup",
+          adminEmails: [],
+          totalRounds: null,
+          roundStatus: "playing",
+          roundApprovalMode: "manual",
+          pendingApprovalAt: null,
+          autoApprovalCancelled: false,
+        };
         if (!data) {
-          return { meta: { name: "", round: 0, status: "setup", adminEmails: [], totalRounds: null }, players: [], pairings: [], games: [] };
+          return { meta: { ...defaults }, players: [], pairings: [], games: [] };
         }
         return {
-          meta: Object.assign({ name: "", round: 0, status: "setup", adminEmails: [], totalRounds: null }, data.meta || {}),
+          meta: Object.assign({ ...defaults }, data.meta || {}),
           players: data.players || [],
           pairings: data.pairings || [],
           games: data.games || [],
@@ -3653,7 +3735,7 @@
         }
       }
 
-      async function fbCreateTournament(name, playerEntries, totalRounds, adminEmails) {
+      async function fbCreateTournament(name, playerEntries, totalRounds, adminEmails, timeControl, roundApprovalMode) {
         if (!isBootstrapping(lastTournamentState)) assertAdmin();
         const seenEmails = new Set();
         for (const p of playerEntries) {
@@ -3679,13 +3761,20 @@
             colorBalance: 0, // >0 jugó más veces con blancas, <0 más veces con negras
           }));
         const rounds = Number(totalRounds);
+        const tc = timeControl || { minutes: 0, increment: 0 };
         await fbRoomRef.set({
           meta: {
             name: name || "Torneo",
             round: 0,
             status: "active",
+            roundStatus: "playing",
+            roundApprovalMode: roundApprovalMode === "auto" ? "auto" : "manual",
+            pendingApprovalAt: null,
+            autoApprovalCancelled: false,
             totalRounds: rounds > 0 ? rounds : null,
             adminEmails: [TOURNAMENT_ADMIN_EMAIL],
+            timeControlMinutes: tc.minutes > 0 ? tc.minutes : 0,
+            timeControlIncrement: tc.increment > 0 ? tc.increment : 0,
           },
           players,
           pairings: [],
@@ -3694,9 +3783,122 @@
         return getTournamentStateOnce();
       }
 
-      // Empareja jugadores estilo suizo simplificado: ordena por puntaje
-      // (con desempate fijo por id), y empareja de a pares evitando repetir
-      // rivales cuando es posible. Si sobra un jugador, recibe bye (+1 punto).
+      // Empareja jugadores estilo suizo: ordena por puntaje y, en caso de
+      // empate, por desempate Buchholz (suma de puntos de los rivales ya
+      // jugados) reusando rankPlayers_ — y como último criterio, el nombre.
+      // Empareja de a pares evitando repetir rivales cuando es posible. Si
+      // sobra un jugador, recibe bye (+1 punto). No toca la base de datos:
+      // solo calcula los datos de la ronda nueva a partir del estado ya
+      // cargado en memoria. La usa fbApproveRound (aprobación manual o
+      // automática de la ronda) y fbGenerateRound (para sortear la ronda 1).
+      // "pairingsForTiebreak" es el historial completo de emparejamientos
+      // del torneo, usado solo para calcular el desempate Buchholz.
+      function buildNextRoundPairings_(players, currentRound, timeControl, pairingsForTiebreak) {
+        const nextRound = currentRound + 1;
+
+        let pool = pairingsForTiebreak ? rankPlayers_(players, pairingsForTiebreak) : players.slice();
+        pool = pool.slice().sort((a, b) => {
+          if (b.points !== a.points) return b.points - a.points;
+          if (pairingsForTiebreak && (b._buchholz || 0) !== (a._buchholz || 0)) return (b._buchholz || 0) - (a._buchholz || 0);
+          if (pairingsForTiebreak) return a.name.localeCompare(b.name);
+          return a.id < b.id ? -1 : 1;
+        });
+
+        let byePlayer = null;
+        if (pool.length % 2 === 1) {
+          for (let i = pool.length - 1; i >= 0; i--) {
+            if (pool[i].byes === 0) {
+              byePlayer = pool[i];
+              break;
+            }
+          }
+          if (!byePlayer) byePlayer = pool[pool.length - 1];
+          pool = pool.filter((p) => p.id !== byePlayer.id);
+        }
+
+        let unpaired = pool.slice();
+        const newPairings = [];
+        const colorBalanceById = {};
+        players.forEach((p) => (colorBalanceById[p.id] = p.colorBalance || 0));
+        let board = 1;
+
+        while (unpaired.length > 0) {
+          const p1 = unpaired.shift();
+          let idx = unpaired.findIndex((p) => p1.played.indexOf(p.id) === -1);
+          if (idx === -1) idx = 0;
+          const p2 = unpaired.splice(idx, 1)[0];
+
+          // Reparto de color: le damos blancas a quien tenga menor
+          // colorBalance (es decir, quien jugó menos veces con blancas
+          // hasta ahora). En empate, mantenemos p1 con blancas.
+          const bal1 = colorBalanceById[p1.id] || 0;
+          const bal2 = colorBalanceById[p2.id] || 0;
+          const p1GetsWhite = bal1 <= bal2;
+          const white = p1GetsWhite ? p1 : p2;
+          const black = p1GetsWhite ? p2 : p1;
+          colorBalanceById[white.id] = (colorBalanceById[white.id] || 0) + 1;
+          colorBalanceById[black.id] = (colorBalanceById[black.id] || 0) - 1;
+
+          newPairings.push({
+            round: nextRound,
+            board: board++,
+            whiteId: white.id,
+            whiteName: white.name,
+            whiteEmail: white.email || "",
+            blackId: black.id,
+            blackName: black.name,
+            blackEmail: black.email || "",
+            result: "",
+          });
+        }
+
+        if (byePlayer) {
+          newPairings.push({
+            round: nextRound,
+            board: board++,
+            whiteId: byePlayer.id,
+            whiteName: byePlayer.name,
+            whiteEmail: byePlayer.email || "",
+            blackId: "",
+            blackName: "BYE",
+            blackEmail: "",
+            result: "1-0",
+          });
+          byePlayer.points += 1;
+          byePlayer.byes += 1;
+        }
+
+        const updatedPlayers = players.map((p) => {
+          if (byePlayer && p.id === byePlayer.id) {
+            return { ...p, points: byePlayer.points, byes: byePlayer.byes, colorBalance: colorBalanceById[p.id] || 0 };
+          }
+          return { ...p, colorBalance: colorBalanceById[p.id] || 0 };
+        });
+
+        // Reloj de la partida: si el torneo tiene tiempo configurado, cada
+        // partida arranca con ese tiempo para las dos partes y empieza a
+        // correr desde que se generó la ronda (como el reloj de una ronda
+        // presencial). turnStartAt se usa para calcular, en cada jugada,
+        // cuánto tiempo real pasó desde la última vez que se guardó el reloj.
+        const minutes = (timeControl && timeControl.minutes) || 0;
+        const increment = (timeControl && timeControl.increment) || 0;
+        const now = Date.now();
+        const newGames = newPairings
+          .filter((p) => p.blackId !== "")
+          .map((p) => ({
+            round: p.round,
+            board: p.board,
+            fen: START_FEN_TOURNEY,
+            lastMoveSan: "",
+            status: "ongoing",
+            clock: minutes > 0 ? { w: minutes * 60, b: minutes * 60 } : null,
+            turnStartAt: minutes > 0 ? now : null,
+            increment: increment,
+          }));
+
+        return { nextRound, newPairings, updatedPlayers, newGames };
+      }
+
       async function fbGenerateRound() {
         assertAdmin();
         await fbDb.runTransaction(async (tx) => {
@@ -3721,95 +3923,100 @@
           if (currentRound > 0 && pending.length > 0) {
             throw new Error("Todavía hay partidas de la ronda " + currentRound + " sin resultado cargado");
           }
-
-          const nextRound = currentRound + 1;
-
-          let pool = players.slice().sort((a, b) => {
-            if (b.points !== a.points) return b.points - a.points;
-            return a.id < b.id ? -1 : 1;
-          });
-
-          let byePlayer = null;
-          if (pool.length % 2 === 1) {
-            for (let i = pool.length - 1; i >= 0; i--) {
-              if (pool[i].byes === 0) {
-                byePlayer = pool[i];
-                break;
-              }
-            }
-            if (!byePlayer) byePlayer = pool[pool.length - 1];
-            pool = pool.filter((p) => p.id !== byePlayer.id);
+          if (currentRound > 0) {
+            throw new Error('A partir de la ronda 1, usá el botón "Aprobar ronda" para generar la próxima.');
           }
 
-          let unpaired = pool.slice();
-          const newPairings = [];
-          const colorBalanceById = {};
-          players.forEach((p) => (colorBalanceById[p.id] = p.colorBalance || 0));
-          let board = 1;
-
-          while (unpaired.length > 0) {
-            const p1 = unpaired.shift();
-            let idx = unpaired.findIndex((p) => p1.played.indexOf(p.id) === -1);
-            if (idx === -1) idx = 0;
-            const p2 = unpaired.splice(idx, 1)[0];
-
-            // Reparto de color: le damos blancas a quien tenga menor
-            // colorBalance (es decir, quien jugó menos veces con blancas
-            // hasta ahora). En empate, mantenemos p1 con blancas.
-            const bal1 = colorBalanceById[p1.id] || 0;
-            const bal2 = colorBalanceById[p2.id] || 0;
-            const p1GetsWhite = bal1 <= bal2;
-            const white = p1GetsWhite ? p1 : p2;
-            const black = p1GetsWhite ? p2 : p1;
-            colorBalanceById[white.id] = (colorBalanceById[white.id] || 0) + 1;
-            colorBalanceById[black.id] = (colorBalanceById[black.id] || 0) - 1;
-
-            newPairings.push({
-              round: nextRound,
-              board: board++,
-              whiteId: white.id,
-              whiteName: white.name,
-              whiteEmail: white.email || "",
-              blackId: black.id,
-              blackName: black.name,
-              blackEmail: black.email || "",
-              result: "",
-            });
-          }
-
-          if (byePlayer) {
-            newPairings.push({
-              round: nextRound,
-              board: board++,
-              whiteId: byePlayer.id,
-              whiteName: byePlayer.name,
-              whiteEmail: byePlayer.email || "",
-              blackId: "",
-              blackName: "BYE",
-              blackEmail: "",
-              result: "1-0",
-            });
-            byePlayer.points += 1;
-            byePlayer.byes += 1;
-          }
-
-          const updatedPlayers = players.map((p) => {
-            if (byePlayer && p.id === byePlayer.id) {
-              return { ...p, points: byePlayer.points, byes: byePlayer.byes, colorBalance: colorBalanceById[p.id] || 0 };
-            }
-            return { ...p, colorBalance: colorBalanceById[p.id] || 0 };
-          });
-
-          const newGames = newPairings
-            .filter((p) => p.blackId !== "")
-            .map((p) => ({ round: p.round, board: p.board, fen: START_FEN_TOURNEY, lastMoveSan: "", status: "ongoing" }));
+          const timeControl = {
+            minutes: (data.meta && data.meta.timeControlMinutes) || 0,
+            increment: (data.meta && data.meta.timeControlIncrement) || 0,
+          };
+          const { nextRound, newPairings, updatedPlayers, newGames } = buildNextRoundPairings_(players, currentRound, timeControl, pairingsAll);
 
           tx.set(fbRoomRef, {
-            meta: { name: data.meta.name, round: nextRound, status: "active", totalRounds: totalRounds || null, adminEmails: data.meta.adminEmails || [] },
+            meta: {
+              name: data.meta.name,
+              round: nextRound,
+              status: "active",
+              roundStatus: "playing",
+              roundApprovalMode: data.meta.roundApprovalMode === "auto" ? "auto" : "manual",
+              pendingApprovalAt: null,
+              autoApprovalCancelled: false,
+              totalRounds: totalRounds || null,
+              adminEmails: data.meta.adminEmails || [],
+              timeControlMinutes: timeControl.minutes,
+              timeControlIncrement: timeControl.increment,
+            },
             players: updatedPlayers,
             pairings: pairingsAll.concat(newPairings),
             games: (data.games || []).concat(newGames),
           });
+        });
+        return getTournamentStateOnce();
+      }
+
+      // Aprueba la ronda que está "Pendiente de aprobación": recalcula la
+      // clasificación (con desempate Buchholz), genera los emparejamientos
+      // de la ronda siguiente respetando las reglas del sistema suizo (sin
+      // repetir rivales cuando se puede, equilibrando colores, asignando
+      // BYE si sobra alguien) y publica esa ronda nueva. Solo administrador.
+      // La usa tanto el botón "Aprobar ronda" (modo manual) como el
+      // temporizador de 30s del modo automático.
+      async function fbApproveRound() {
+        assertAdmin();
+        await fbDb.runTransaction(async (tx) => {
+          const snap = await tx.get(fbRoomRef);
+          if (!snap.exists) throw new Error("Todavía no creaste un torneo");
+          const data = snap.data();
+          const meta = { ...data.meta };
+          if (meta.status !== "active" || meta.roundStatus !== "pending_approval") {
+            throw new Error("No hay ninguna ronda pendiente de aprobación en este momento");
+          }
+          const players = (data.players || []).map((p) => ({ ...p, played: (p.played || []).slice() }));
+          const pairingsAll = (data.pairings || []).map((p) => ({ ...p }));
+          const roundPairings = pairingsAll.filter((p) => p.round === meta.round);
+          const pending = roundPairings.filter((p) => !p.result);
+          if (pending.length > 0) {
+            throw new Error("Todavía hay partidas de esta ronda sin resultado cargado");
+          }
+
+          const timeControl = {
+            minutes: meta.timeControlMinutes || 0,
+            increment: meta.timeControlIncrement || 0,
+          };
+          const { nextRound, newPairings, updatedPlayers, newGames } = buildNextRoundPairings_(
+            players,
+            meta.round,
+            timeControl,
+            pairingsAll
+          );
+
+          meta.round = nextRound;
+          meta.roundStatus = "playing";
+          meta.pendingApprovalAt = null;
+          meta.autoApprovalCancelled = false;
+
+          tx.update(fbRoomRef, {
+            meta,
+            players: updatedPlayers,
+            pairings: pairingsAll.concat(newPairings),
+            games: (data.games || []).concat(newGames),
+          });
+        });
+        return getTournamentStateOnce();
+      }
+
+      // Cancela la cuenta regresiva del modo automático (la ronda queda
+      // "Pendiente de aprobación" igual, pero ya no se aprueba sola: hay que
+      // tocar "Aprobar ronda" a mano). Solo administrador.
+      async function fbCancelAutoApproval() {
+        assertAdmin();
+        await fbDb.runTransaction(async (tx) => {
+          const snap = await tx.get(fbRoomRef);
+          if (!snap.exists) throw new Error("Todavía no creaste un torneo");
+          const data = snap.data();
+          if (data.meta.roundStatus !== "pending_approval") return; // nada que cancelar
+          tx.update(fbRoomRef, { meta: { ...data.meta, autoApprovalCancelled: true } });
         });
         return getTournamentStateOnce();
       }
@@ -3852,17 +4059,32 @@
             byId[target.blackId].played.push(target.whiteId);
           }
 
-          // Si esta era la última partida pendiente de la última ronda
-          // configurada, el torneo se cierra solo.
+          // Si con este resultado ya quedaron cargadas todas las partidas de
+          // la ronda actual: si ya se jugaron todas las rondas configuradas
+          // el torneo se cierra (como antes), y si no, la ronda pasa a
+          // "Pendiente de aprobación" — ya NO se generan los emparejamientos
+          // de la ronda siguiente automáticamente acá. Eso ahora lo hace
+          // fbApproveRound, a mano (modo manual) o solo, después de la
+          // cuenta regresiva (modo automático); ver fbApproveRound más abajo.
           const meta = { ...data.meta };
           const totalRounds = meta.totalRounds;
-          if (meta.status === "active" && totalRounds && meta.round >= totalRounds) {
+
+          if (meta.status === "active" && meta.roundStatus !== "pending_approval") {
             const roundPairings = pairings.filter((p) => p.round === meta.round);
             const allDone = roundPairings.every((p) => p.result);
-            if (allDone) meta.status = "finished";
+            if (allDone) {
+              if (totalRounds && meta.round >= totalRounds) {
+                meta.status = "finished";
+                meta.roundStatus = "playing";
+              } else {
+                meta.roundStatus = "pending_approval";
+                meta.pendingApprovalAt = Date.now();
+                meta.autoApprovalCancelled = false;
+              }
+            }
           }
 
-          tx.update(fbRoomRef, { players, pairings, meta });
+          tx.update(fbRoomRef, { players, pairings, games: data.games || [], meta });
         });
         return getTournamentStateOnce();
       }
@@ -3895,14 +4117,26 @@
       // Cambia nombre y/o cantidad de rondas. Solo administradores. La lista
       // de administradores ya no es configurable: queda fija en
       // TOURNAMENT_ADMIN_EMAIL sin importar lo que se pase acá.
-      async function fbUpdateSettings(name, totalRounds, adminEmails) {
+      async function fbUpdateSettings(name, totalRounds, adminEmails, timeControl, roundApprovalMode) {
         assertAdmin();
         await fbDb.runTransaction(async (tx) => {
           const snap = await tx.get(fbRoomRef);
           if (!snap.exists) throw new Error("Todavía no creaste un torneo");
           const data = snap.data();
+          const tc = timeControl || {
+            minutes: data.meta.timeControlMinutes || 0,
+            increment: data.meta.timeControlIncrement || 0,
+          };
           tx.update(fbRoomRef, {
-            meta: { ...data.meta, name: name || data.meta.name, totalRounds: totalRounds || null, adminEmails: [TOURNAMENT_ADMIN_EMAIL] },
+            meta: {
+              ...data.meta,
+              name: name || data.meta.name,
+              totalRounds: totalRounds || null,
+              adminEmails: [TOURNAMENT_ADMIN_EMAIL],
+              timeControlMinutes: tc.minutes > 0 ? tc.minutes : 0,
+              timeControlIncrement: tc.increment > 0 ? tc.increment : 0,
+              roundApprovalMode: roundApprovalMode === "auto" ? "auto" : "manual",
+            },
           });
         });
         return getTournamentStateOnce();
@@ -3919,6 +4153,22 @@
           const g = games.find((x) => x.round === round && x.board === board);
           if (!g) throw new Error("No se encontró esa partida");
           if (g.status === "finished") throw new Error("Esa partida ya terminó");
+
+          // Si la partida tiene reloj y esto es una jugada real (cambió el
+          // FEN), le descontamos a quien acaba de mover el tiempo que pasó
+          // desde su último turno, y le sumamos el incremento si corresponde
+          // (resignación/tablas/abandono por tiempo no mueven pieza, así que
+          // no tocan el reloj acá).
+          if (g.clock && fen !== g.fen) {
+            const moverColor = new Chess(g.fen).turn();
+            const elapsed = Math.max(0, Math.round((Date.now() - (g.turnStartAt || Date.now())) / 1000));
+            g.clock = { ...g.clock, [moverColor]: Math.max(0, g.clock[moverColor] - elapsed) };
+            if (!gameOverResult && g.increment) {
+              g.clock = { ...g.clock, [moverColor]: g.clock[moverColor] + g.increment };
+            }
+            g.turnStartAt = Date.now();
+          }
+
           g.fen = fen;
           g.lastMoveSan = lastMoveSan || "";
           // Guardamos también origen/destino de la jugada para que el rival
@@ -3991,6 +4241,79 @@
           });
       }
 
+      let tournamentAutoApproveTimer = null;
+
+      function stopAutoApproveTimer() {
+        clearInterval(tournamentAutoApproveTimer);
+        tournamentAutoApproveTimer = null;
+      }
+
+      // Pinta la tarjeta "Ronda pendiente de aprobación": a los jugadores
+      // les muestra solo un aviso, y al administrador le muestra el botón
+      // "Aprobar ronda" y, si el torneo está en modo automático, la cuenta
+      // regresiva de 30s (con botón para cancelarla).
+      function renderApprovalPanel(state, isAdmin, isPendingApproval) {
+        const panel = document.getElementById("tournament-approval-panel");
+        const statusEl = document.getElementById("tournament-approval-status");
+        const adminControls = document.getElementById("tournament-approval-admin-controls");
+        const autoBox = document.getElementById("tournament-auto-approve-box");
+
+        if (!isPendingApproval) {
+          panel.style.display = "none";
+          stopAutoApproveTimer();
+          return;
+        }
+
+        panel.style.display = "";
+        adminControls.style.display = isAdmin ? "" : "none";
+        statusEl.textContent = isAdmin
+          ? "Ya están cargados todos los resultados de esta ronda. Revisá la tabla de posiciones y los resultados abajo; podés corregir cualquier resultado antes de aprobar."
+          : "Ya terminaron todas las partidas de esta ronda. Falta que el administrador la revise y apruebe para que se genere la ronda siguiente.";
+
+        const isAuto = state.meta.roundApprovalMode === "auto" && !state.meta.autoApprovalCancelled;
+        if (!isAdmin || !isAuto) {
+          autoBox.style.display = "none";
+          stopAutoApproveTimer();
+          return;
+        }
+
+        autoBox.style.display = "";
+        if (tournamentAutoApproveTimer) return; // ya está corriendo, no hace falta arrancar otro
+
+        const countdownEl = document.getElementById("tournament-auto-approve-countdown");
+        const tick = async () => {
+          const st = lastTournamentState;
+          if (!st) return;
+          const m = st.meta;
+          const stillAuto =
+            m.status === "active" && m.roundStatus === "pending_approval" && m.roundApprovalMode === "auto" && !m.autoApprovalCancelled;
+          if (!stillAuto) {
+            stopAutoApproveTimer();
+            renderTournamentState(st); // refresca la tarjeta (por ej. si ya se aprobó o se canceló desde otra pestaña)
+            return;
+          }
+          const deadline = (m.pendingApprovalAt || Date.now()) + 30000;
+          const remaining = Math.max(0, Math.ceil((deadline - Date.now()) / 1000));
+          countdownEl.textContent = `⏱️ Se va a aprobar sola en ${remaining}s...`;
+          if (remaining <= 0) {
+            stopAutoApproveTimer();
+            try {
+              await fbApproveRound();
+              toast("✅ Ronda aprobada automáticamente: se generó la ronda siguiente.");
+            } catch (err) {
+              // Si ya se aprobó desde otra pestaña/dispositivo (por ejemplo,
+              // el administrador tiene el torneo abierto en dos lugares),
+              // el segundo intento falla en silencio: no es un error real.
+              if (!/pendiente de aprobación/.test(err.message)) {
+                toast("❌ No se pudo aprobar la ronda automáticamente: " + err.message);
+              }
+            }
+          }
+        };
+        tick();
+        tournamentAutoApproveTimer = setInterval(tick, 500);
+      }
+
       function renderTournamentState(state) {
         const setupBox = document.getElementById("tournament-setup-box");
         const activeBox = document.getElementById("tournament-active-box");
@@ -4014,18 +4337,23 @@
 
         const isAdmin = isCurrentUserAdmin(state);
         const isFinished = state.meta.status === "finished";
+        const isPendingApproval = !isFinished && state.meta.roundStatus === "pending_approval";
         const roundsNote = state.meta.totalRounds ? ` de ${state.meta.totalRounds}` : "";
 
         document.getElementById("tournament-title-display").textContent = "🏆 " + state.meta.name;
         document.getElementById("tournament-round-display").textContent = isFinished
           ? `Torneo finalizado — ronda ${state.meta.round}${roundsNote} — ${state.players.length} jugadores`
+          : isPendingApproval
+          ? `Ronda ${state.meta.round}${roundsNote} — ⏳ Pendiente de aprobación — ${state.players.length} jugadores`
           : `Ronda ${state.meta.round}${roundsNote} — ${state.players.length} jugadores`;
 
         document.getElementById("tournament-admin-controls").style.display = isAdmin ? "flex" : "none";
-        document.getElementById("tournament-next-round-btn").style.display = isFinished ? "none" : "";
+        document.getElementById("tournament-next-round-btn").style.display = !isFinished && state.meta.round === 0 ? "" : "none";
         document.getElementById("tournament-finish-btn").style.display = isFinished ? "none" : "";
         document.getElementById("tournament-reopen-btn").style.display = isFinished ? "" : "none";
         if (!isAdmin) document.getElementById("tournament-settings-panel").style.display = "none";
+
+        renderApprovalPanel(state, isAdmin, isPendingApproval);
 
         const bannerEl = document.getElementById("tournament-champion-banner");
         if (isFinished) {
@@ -4119,7 +4447,13 @@
             tournamentBusy = true;
             try {
               assertAdmin();
-              await fbSubmitResult(btn.dataset.round, btn.dataset.board, btn.dataset.result);
+              const wasPending = state.meta.roundStatus === "pending_approval";
+              const newState = await fbSubmitResult(btn.dataset.round, btn.dataset.board, btn.dataset.result);
+              if (!wasPending && newState.meta.roundStatus === "pending_approval") {
+                toast("✅ Ya están todos los resultados de la ronda. Revisá y aprobá la siguiente ronda.");
+              } else if (!wasPending && newState.meta.status === "finished") {
+                toast("🏁 Se jugaron todas las rondas: el torneo terminó.");
+              }
             } catch (err) {
               toast("❌ No se pudo cargar el resultado: " + err.message);
             } finally {
@@ -4166,23 +4500,46 @@
         }
       }
 
-      // Arma el texto del popup de fin de partida de torneo a partir del
-      // resultado (1-0 / 0-1 / 1/2-1/2), aclarando si ganó/perdió/empató
-      // quien está mirando la pantalla.
-      function tournamentResultMessage(result) {
+      // Arma el mensaje del popup de fin de partida de torneo a partir del
+      // resultado (1-0 / 0-1 / 1/2-1/2): un título grande y bien claro con
+      // quién ganó (o si fue tablas), y una segunda línea aclarando si ganó,
+      // perdió o empató quien está mirando la pantalla. Devuelve también un
+      // "variant" (win/loss/draw) para pintar el popup de color acorde.
+      // "reason" es un motivo opcional para agregar al final (por ejemplo,
+      // "por tiempo" cuando se le acabó el reloj a alguien).
+      function tournamentResultMessage(result, reason) {
         const ctx = tournamentMatchCtx;
         const whiteName = ctx ? ctx.whiteName : "Blancas";
         const blackName = ctx ? ctx.blackName : "Negras";
-        let text;
-        if (result === "1-0") text = `♚ ¡Jaque mate o abandono! Ganaron las Blancas (${whiteName}).`;
-        else if (result === "0-1") text = `♚ ¡Jaque mate o abandono! Ganaron las Negras (${blackName}).`;
-        else if (result === "1/2-1/2") text = "🤝 Partida de torneo terminada en tablas.";
-        else return "🏁 Partida de torneo terminada.";
-
+        const suffix = reason ? ` (${reason})` : "";
         const myColor = tournamentMyColor();
-        if (myColor === "w") text += result === "1-0" ? " ¡Ganaste vos!" : result === "0-1" ? " Perdiste esta." : "";
-        if (myColor === "b") text += result === "0-1" ? " ¡Ganaste vos!" : result === "1-0" ? " Perdiste esta." : "";
-        return text;
+
+        let headline, detail, variant;
+        if (result === "1-0") {
+          headline = "🏆 ¡Ganaron las Blancas!";
+          detail = `${whiteName} le ganó a ${blackName}${suffix}.`;
+          variant = myColor === "w" ? "win" : myColor === "b" ? "loss" : null;
+          if (myColor === "w") detail += "\n¡Ganaste vos! 🎉";
+          if (myColor === "b") detail += "\nPerdiste esta partida.";
+        } else if (result === "0-1") {
+          headline = "🏆 ¡Ganaron las Negras!";
+          detail = `${blackName} le ganó a ${whiteName}${suffix}.`;
+          variant = myColor === "b" ? "win" : myColor === "w" ? "loss" : null;
+          if (myColor === "b") detail += "\n¡Ganaste vos! 🎉";
+          if (myColor === "w") detail += "\nPerdiste esta partida.";
+        } else if (result === "1/2-1/2") {
+          headline = "🤝 ¡Tablas!";
+          detail = `${whiteName} y ${blackName} empataron la partida${suffix}.`;
+          variant = myColor ? "draw" : null;
+        } else {
+          return { text: "🏁 Partida de torneo terminada.", variant: null };
+        }
+        return { text: headline + "\n\n" + detail, variant };
+      }
+
+      function showTournamentResult(result, reason) {
+        const msg = tournamentResultMessage(result, reason);
+        showAlert(msg.text, msg.variant);
       }
 
       function tournamentMyColor() {
@@ -4201,12 +4558,13 @@
           statusEl.textContent = "🏁 Partida terminada.";
           document.getElementById("tournament-match-controls").style.display = "none";
           document.getElementById("tournament-match-spectator-note").style.display = "none";
+          clearInterval(tournamentClockTimer);
           if (!tournamentResultShown) {
             tournamentResultShown = true;
             const pairing = (lastTournamentState && lastTournamentState.pairings || []).find(
               (p) => p.round === gameRow.round && p.board === gameRow.board
             );
-            showAlert(tournamentResultMessage(pairing ? pairing.result : ""));
+            showTournamentResult(pairing ? pairing.result : "");
           }
           return;
         }
@@ -4228,6 +4586,7 @@
           (g) => g.round === tournamentMatchCtx.round && g.board === tournamentMatchCtx.board
         );
         if (!gameRow) return;
+        tournamentCurrentGameRow = gameRow;
         if (gameRow.fen !== game.fen()) {
           game.load(gameRow.fen);
           selected = null;
@@ -4243,6 +4602,72 @@
           render();
         }
         updateTournamentMatchBar(gameRow);
+        updateTournamentClockDisplay();
+      }
+
+      // Reloj visual de la partida de torneo abierta: se recalcula a partir
+      // de gameRow.clock (tiempo restante congelado en el último movimiento)
+      // más lo que pasó desde gameRow.turnStartAt hasta ahora, así que no
+      // hace falta ir a buscarlo a Firestore cada segundo. Si a alguien se
+      // le acaba el tiempo, cualquiera de las dos pantallas conectadas
+      // (jugador o rival) puede reclamar la derrota por tiempo.
+      function updateTournamentClockDisplay() {
+        const gameRow = tournamentCurrentGameRow;
+        const wEl = document.getElementById("clock-w");
+        const bEl = document.getElementById("clock-b");
+        if (!gameRow || !gameRow.clock || !wEl || !bEl) return;
+        const turn = game.turn();
+        const finished = gameRow.status === "finished";
+        const elapsed = finished ? 0 : Math.max(0, Math.round((Date.now() - (gameRow.turnStartAt || Date.now())) / 1000));
+        const remaining = {
+          w: gameRow.clock.w - (turn === "w" && !finished ? elapsed : 0),
+          b: gameRow.clock.b - (turn === "b" && !finished ? elapsed : 0),
+        };
+        const wSecs = Math.max(0, remaining.w);
+        const bSecs = Math.max(0, remaining.b);
+        wEl.textContent = formatTime(wSecs);
+        bEl.textContent = formatTime(bSecs);
+        wEl.classList.toggle("active", turn === "w" && !finished);
+        bEl.classList.toggle("active", turn === "b" && !finished);
+
+        if (!finished && ((turn === "w" && remaining.w <= 0) || (turn === "b" && remaining.b <= 0))) {
+          claimTournamentTimeout(turn);
+        }
+      }
+
+      // Alguien se quedó sin tiempo: se le declara la partida perdida a
+      // "flaggedColor". Cualquiera de las dos pantallas conectadas puede
+      // reclamarlo (por si quien se quedó sin tiempo cerró la app); si dos
+      // clientes lo intentan a la vez, el segundo simplemente recibe el
+      // error "esa partida ya terminó" y no pasa nada.
+      async function claimTournamentTimeout(flaggedColor) {
+        if (!tournamentMatchActive || !tournamentMatchCtx) return;
+        if (tournamentResultShown || tournamentTimeoutClaimBusy) return;
+        tournamentTimeoutClaimBusy = true;
+        try {
+          const result = flaggedColor === "w" ? "0-1" : "1-0";
+          const state = await fbMakeMove(
+            tournamentMatchCtx.round,
+            tournamentMatchCtx.board,
+            game.fen(),
+            game.history().slice(-1)[0] || "",
+            result
+          );
+          const gameRow = (state.games || []).find(
+            (g) => g.round === tournamentMatchCtx.round && g.board === tournamentMatchCtx.board
+          );
+          if (!tournamentResultShown) {
+            tournamentResultShown = true;
+            showTournamentResult(result, "tiempo agotado");
+          }
+          updateTournamentMatchBar(gameRow);
+        } catch (err) {
+          // Lo más probable es que la partida ya haya terminado de otra
+          // forma (la reclamó el rival, se cargó otro resultado, etc.):
+          // no hace falta mostrar ningún error acá.
+        } finally {
+          tournamentTimeoutClaimBusy = false;
+        }
       }
 
       async function enterTournamentMatch(round, board, whiteName, blackName, whiteEmail, blackEmail) {
@@ -4279,8 +4704,21 @@
             const el = document.getElementById(id);
             if (el) el.style.display = "none";
           });
+          // El reloj se muestra solo si el torneo tiene tiempo configurado
+          // para esta partida (gameRow.clock). Se reutiliza el mismo reloj
+          // visual del modo "Jugar", pero alimentado por el reloj guardado
+          // en Firestore (ver updateTournamentClockDisplay) en vez del
+          // reloj local de partidas contra la IA / pasar y jugar.
+          tournamentCurrentGameRow = gameRow;
+          clearInterval(tournamentClockTimer);
           const clockEl = document.querySelector("#page-jugar .clock");
-          if (clockEl) clockEl.style.display = "none";
+          if (gameRow.clock) {
+            if (clockEl) clockEl.style.display = "";
+            updateTournamentClockDisplay();
+            tournamentClockTimer = setInterval(updateTournamentClockDisplay, 500);
+          } else if (clockEl) {
+            clockEl.style.display = "none";
+          }
 
           // En una partida de torneo no corresponde ofrecer ayuda del motor:
           // se ocultan "Modo educativo", "Ayuda educativa" y "Tutor IA".
@@ -4313,6 +4751,9 @@
         tournamentMatchCtx = null;
         tournamentResultShown = false;
         clearOpponentMoveHighlight();
+        clearInterval(tournamentClockTimer);
+        tournamentClockTimer = null;
+        tournamentCurrentGameRow = null;
 
         document.getElementById("tournament-match-bar").style.display = "none";
         ["new-game", "undo", "resign", "copy-game"].forEach((id) => {
@@ -4360,12 +4801,16 @@
           const gameRow = (state.games || []).find(
             (g) => g.round === tournamentMatchCtx.round && g.board === tournamentMatchCtx.board
           );
+          if (gameRow) tournamentCurrentGameRow = gameRow;
           if (gameOverResult && !tournamentResultShown) {
             // Se conoce el resultado exacto ya mismo (no hace falta esperar
             // a que llegue el próximo snapshot de Firestore), así que se
             // muestra el popup de una: funciona también a pantalla completa.
             tournamentResultShown = true;
-            showAlert(tournamentResultMessage(gameOverResult));
+            showTournamentResult(gameOverResult);
+          }
+          if (gameOverResult && state.meta.roundStatus === "pending_approval") {
+            toast("✅ Ya están todos los resultados de esta ronda, falta que el administrador la apruebe.");
           }
           updateTournamentMatchBar(gameRow);
         } catch (err) {
@@ -4395,10 +4840,14 @@
           );
           if (!tournamentResultShown) {
             tournamentResultShown = true;
-            showAlert(tournamentResultMessage(myColor === "w" ? "0-1" : "1-0"));
+            showTournamentResult(myColor === "w" ? "0-1" : "1-0");
           }
           updateTournamentMatchBar(gameRow);
-          toast("🏳️ Te rendiste. Resultado cargado.");
+          toast(
+            state.meta.roundStatus === "pending_approval"
+              ? "🏳️ Te rendiste. Resultado cargado. Falta que el administrador apruebe la ronda."
+              : "🏳️ Te rendiste. Resultado cargado."
+          );
         } catch (err) {
           toast("❌ " + err.message);
         } finally {
@@ -4423,10 +4872,14 @@
           );
           if (!tournamentResultShown) {
             tournamentResultShown = true;
-            showAlert(tournamentResultMessage("1/2-1/2"));
+            showTournamentResult("1/2-1/2");
           }
           updateTournamentMatchBar(gameRow);
-          toast("🤝 Tablas cargadas.");
+          toast(
+            state.meta.roundStatus === "pending_approval"
+              ? "🤝 Tablas cargadas. Falta que el administrador apruebe la ronda."
+              : "🤝 Tablas cargadas."
+          );
         } catch (err) {
           toast("❌ " + err.message);
         } finally {
@@ -4490,8 +4943,13 @@
           toast("❌ Iniciá sesión con Google primero");
           return;
         }
+        const timeControl = {
+          minutes: getRawMinutesFromSelect("tournament-time-mode", "tournament-custom-minutes"),
+          increment: getIncrementFromSelect("tournament-increment", "tournament-custom-increment"),
+        };
+        const roundApprovalMode = document.getElementById("tournament-round-mode").value === "auto" ? "auto" : "manual";
         try {
-          await fbCreateTournament(name, playerEntries, totalRounds);
+          await fbCreateTournament(name, playerEntries, totalRounds, undefined, timeControl, roundApprovalMode);
           await fbGenerateRound();
         } catch (err) {
           toast("❌ No se pudo crear el torneo: " + err.message);
@@ -4528,6 +4986,21 @@
         if (!state) return;
         document.getElementById("tournament-settings-name-input").value = state.meta.name || "";
         document.getElementById("tournament-settings-rounds-input").value = state.meta.totalRounds || "";
+        setSelectFromValue(
+          "tournament-settings-time-mode",
+          "tournament-settings-custom-time-label",
+          "tournament-settings-custom-minutes",
+          state.meta.timeControlMinutes || 0,
+          ["none", "1", "3", "5", "10", "15", "30"]
+        );
+        setSelectFromValue(
+          "tournament-settings-increment",
+          "tournament-settings-custom-increment-label",
+          "tournament-settings-custom-increment",
+          state.meta.timeControlIncrement || 0,
+          ["0", "2", "5", "10", "30"]
+        );
+        document.getElementById("tournament-settings-round-mode").value = state.meta.roundApprovalMode === "auto" ? "auto" : "manual";
         document.getElementById("tournament-settings-panel").style.display = "";
       });
 
@@ -4545,9 +5018,34 @@
             return;
           }
           const totalRounds = roundsRaw ? Number(roundsRaw) : null;
-          await fbUpdateSettings(name, totalRounds, [TOURNAMENT_ADMIN_EMAIL]);
+          const timeControl = {
+            minutes: getRawMinutesFromSelect("tournament-settings-time-mode", "tournament-settings-custom-minutes"),
+            increment: getIncrementFromSelect("tournament-settings-increment", "tournament-settings-custom-increment"),
+          };
+          const roundApprovalMode = document.getElementById("tournament-settings-round-mode").value === "auto" ? "auto" : "manual";
+          await fbUpdateSettings(name, totalRounds, [TOURNAMENT_ADMIN_EMAIL], timeControl, roundApprovalMode);
           document.getElementById("tournament-settings-panel").style.display = "none";
           toast("✓ Configuración guardada");
+        } catch (err) {
+          toast("❌ " + err.message);
+        }
+      });
+
+      document.getElementById("tournament-approve-round-btn").addEventListener("click", async () => {
+        try {
+          assertAdmin();
+          await fbApproveRound();
+          toast("✅ Ronda aprobada: se generó y publicó la ronda siguiente.");
+        } catch (err) {
+          toast("❌ " + err.message);
+        }
+      });
+
+      document.getElementById("tournament-cancel-auto-approve-btn").addEventListener("click", async () => {
+        try {
+          assertAdmin();
+          await fbCancelAutoApproval();
+          toast("✖️ Aprobación automática cancelada. Aprobá la ronda a mano cuando quieras.");
         } catch (err) {
           toast("❌ " + err.message);
         }

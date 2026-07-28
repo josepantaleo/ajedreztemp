@@ -1859,6 +1859,125 @@
                 apenas se carga el resultado de la última partida de esa
                 ronda.
               </p>
+
+              <label for="tournament-time-mode" style="display: block; margin: 14px 0 6px; font-weight: 600"
+                >Tiempo por jugador</label
+              >
+              <select
+                id="tournament-time-mode"
+                style="
+                  width: 100%;
+                  padding: 10px 12px;
+                  border-radius: 10px;
+                  border: 1px solid var(--surface2);
+                  background: var(--surface);
+                  color: var(--text);
+                "
+              >
+                <option value="none">Sin reloj</option>
+                <option value="1">1 minuto</option>
+                <option value="3">3 minutos</option>
+                <option value="5" selected>5 minutos</option>
+                <option value="10">10 minutos</option>
+                <option value="15">15 minutos</option>
+                <option value="30">30 minutos</option>
+                <option value="custom">Personalizado</option>
+              </select>
+
+              <label
+                for="tournament-custom-minutes"
+                id="tournament-custom-time-label"
+                style="display: none; margin: 10px 0 6px; font-weight: 600"
+                >Minutos personalizados</label
+              >
+              <input
+                type="number"
+                id="tournament-custom-minutes"
+                min="1"
+                max="180"
+                value="5"
+                style="
+                  width: 100%;
+                  padding: 10px 12px;
+                  border-radius: 10px;
+                  border: 1px solid var(--surface2);
+                  background: var(--surface);
+                  color: var(--text);
+                "
+              />
+
+              <label for="tournament-increment" style="display: block; margin: 14px 0 6px; font-weight: 600"
+                >Incremento por jugada</label
+              >
+              <select
+                id="tournament-increment"
+                style="
+                  width: 100%;
+                  padding: 10px 12px;
+                  border-radius: 10px;
+                  border: 1px solid var(--surface2);
+                  background: var(--surface);
+                  color: var(--text);
+                "
+              >
+                <option value="0" selected>0 segundos</option>
+                <option value="2">2 segundos</option>
+                <option value="5">5 segundos</option>
+                <option value="10">10 segundos</option>
+                <option value="30">30 segundos</option>
+                <option value="custom">Personalizado</option>
+              </select>
+
+              <label
+                for="tournament-custom-increment"
+                id="tournament-custom-increment-label"
+                style="display: none; margin: 10px 0 6px; font-weight: 600"
+                >Incremento personalizado (segundos)</label
+              >
+              <input
+                type="number"
+                id="tournament-custom-increment"
+                min="0"
+                max="60"
+                value="0"
+                style="
+                  width: 100%;
+                  padding: 10px 12px;
+                  border-radius: 10px;
+                  border: 1px solid var(--surface2);
+                  background: var(--surface);
+                  color: var(--text);
+                "
+              />
+              <p class="muted" style="font-size: 13px; margin: 6px 0 0">
+                Este reloj se usa en todas las partidas del torneo. "Sin
+                reloj" deja las partidas sin límite de tiempo.
+              </p>
+
+              <label for="tournament-round-mode" style="display: block; margin: 14px 0 6px; font-weight: 600"
+                >Avance de ronda</label
+              >
+              <select
+                id="tournament-round-mode"
+                style="
+                  width: 100%;
+                  padding: 10px 12px;
+                  border-radius: 10px;
+                  border: 1px solid var(--surface2);
+                  background: var(--surface);
+                  color: var(--text);
+                "
+              >
+                <option value="manual" selected>Manual (requiere aprobación del administrador)</option>
+                <option value="auto">Automático (cuenta regresiva de 30 segundos)</option>
+              </select>
+              <p class="muted" style="font-size: 13px; margin: 6px 0 0">
+                Cuando terminan todas las partidas de una ronda, el torneo
+                queda "Pendiente de aprobación". En modo manual hay que
+                tocar "Aprobar ronda"; en modo automático arranca una cuenta
+                regresiva de 30s que se puede cancelar antes de que termine.
+              </p>
+
               <button class="btn primary" id="tournament-create-btn" style="margin-top: 14px">
                 Crear torneo y sortear ronda 1
               </button>
@@ -1919,6 +2038,125 @@
                     margin-bottom: 12px;
                   "
                 />
+
+                <label for="tournament-settings-time-mode" style="display: block; margin-bottom: 6px; font-weight: 600"
+                  >Tiempo por jugador</label
+                >
+                <select
+                  id="tournament-settings-time-mode"
+                  style="
+                    width: 100%;
+                    padding: 10px 12px;
+                    border-radius: 10px;
+                    border: 1px solid var(--surface2);
+                    background: var(--surface);
+                    color: var(--text);
+                    margin-bottom: 12px;
+                  "
+                >
+                  <option value="none">Sin reloj</option>
+                  <option value="1">1 minuto</option>
+                  <option value="3">3 minutos</option>
+                  <option value="5">5 minutos</option>
+                  <option value="10">10 minutos</option>
+                  <option value="15">15 minutos</option>
+                  <option value="30">30 minutos</option>
+                  <option value="custom">Personalizado</option>
+                </select>
+
+                <label
+                  for="tournament-settings-custom-minutes"
+                  id="tournament-settings-custom-time-label"
+                  style="display: none; margin-bottom: 6px; font-weight: 600"
+                  >Minutos personalizados</label
+                >
+                <input
+                  type="number"
+                  id="tournament-settings-custom-minutes"
+                  min="1"
+                  max="180"
+                  value="5"
+                  style="
+                    width: 100%;
+                    padding: 10px 12px;
+                    border-radius: 10px;
+                    border: 1px solid var(--surface2);
+                    background: var(--surface);
+                    color: var(--text);
+                    margin-bottom: 12px;
+                  "
+                />
+
+                <label for="tournament-settings-increment" style="display: block; margin-bottom: 6px; font-weight: 600"
+                  >Incremento por jugada</label
+                >
+                <select
+                  id="tournament-settings-increment"
+                  style="
+                    width: 100%;
+                    padding: 10px 12px;
+                    border-radius: 10px;
+                    border: 1px solid var(--surface2);
+                    background: var(--surface);
+                    color: var(--text);
+                    margin-bottom: 12px;
+                  "
+                >
+                  <option value="0">0 segundos</option>
+                  <option value="2">2 segundos</option>
+                  <option value="5">5 segundos</option>
+                  <option value="10">10 segundos</option>
+                  <option value="30">30 segundos</option>
+                  <option value="custom">Personalizado</option>
+                </select>
+
+                <label
+                  for="tournament-settings-custom-increment"
+                  id="tournament-settings-custom-increment-label"
+                  style="display: none; margin-bottom: 6px; font-weight: 600"
+                  >Incremento personalizado (segundos)</label
+                >
+                <input
+                  type="number"
+                  id="tournament-settings-custom-increment"
+                  min="0"
+                  max="60"
+                  value="0"
+                  style="
+                    width: 100%;
+                    padding: 10px 12px;
+                    border-radius: 10px;
+                    border: 1px solid var(--surface2);
+                    background: var(--surface);
+                    color: var(--text);
+                    margin-bottom: 12px;
+                  "
+                />
+                <p class="muted" style="font-size: 13px; margin-bottom: 12px">
+                  ⏱️ El nuevo tiempo se aplica a partir de la próxima ronda que
+                  se genere; las partidas ya en curso siguen con el reloj con
+                  el que empezaron.
+                </p>
+
+                <label for="tournament-settings-round-mode" style="display: block; margin-bottom: 6px; font-weight: 600"
+                  >Avance de ronda</label
+                >
+                <select
+                  id="tournament-settings-round-mode"
+                  style="
+                    width: 100%;
+                    padding: 10px 12px;
+                    border-radius: 10px;
+                    border: 1px solid var(--surface2);
+                    background: var(--surface);
+                    color: var(--text);
+                    margin-bottom: 12px;
+                  "
+                >
+                  <option value="manual">Manual (requiere aprobación del administrador)</option>
+                  <option value="auto">Automático (cuenta regresiva de 30 segundos)</option>
+                </select>
+
                 <p class="muted" style="font-size: 13px; margin-bottom: 12px">
                   🔒 El administrador del torneo es fijo:
                   <strong>ipem146centenario@gmail.com</strong>.
@@ -1936,6 +2174,26 @@
               >
                 <h3 style="margin: 0 0 6px">🏆 Torneo finalizado</h3>
                 <p id="tournament-champion-text" style="font-size: 18px; font-weight: 700; margin: 0"></p>
+              </div>
+
+              <div
+                class="card"
+                id="tournament-approval-panel"
+                style="display: none; text-align: center; border: 2px solid var(--accent)"
+              >
+                <h3 style="margin: 0 0 6px">⏳ Ronda pendiente de aprobación</h3>
+                <p id="tournament-approval-status" style="margin: 0 0 10px"></p>
+                <div id="tournament-approval-admin-controls" style="display: none">
+                  <button class="btn primary" id="tournament-approve-round-btn">
+                    ✅ Aprobar ronda y generar la siguiente
+                  </button>
+                  <div id="tournament-auto-approve-box" style="display: none; margin-top: 10px">
+                    <p id="tournament-auto-approve-countdown" style="font-weight: 700; margin: 0 0 8px"></p>
+                    <button class="btn" id="tournament-cancel-auto-approve-btn">
+                      ✖️ Cancelar aprobación automática
+                    </button>
+                  </div>
+                </div>
               </div>
 
               <div class="card" id="tournament-pairings-card">
