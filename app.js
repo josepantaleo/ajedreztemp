@@ -1151,6 +1151,12 @@
       }
 
       function addIncrement() {
+        // En una partida de torneo el incremento ya lo aplica fbMakeMove
+        // sobre gameRow.clock (ver TORNEO más abajo); este reloj es el de
+        // las partidas normales de "Jugar" y no debe tocarse acá, o
+        // termina pisando (y desincronizando entre pantallas) el reloj
+        // del torneo, que comparte los mismos elementos #clock-w/#clock-b.
+        if (tournamentMatchActive) return;
         const increment = getIncrement();
         if (!increment || !clockEnabled || game.game_over()) return;
         const prevTurn = game.turn() === 'w' ? 'b' : 'w';
@@ -1166,7 +1172,7 @@
 
         if (start && initial > 0) {
           clockTimer = setInterval(() => {
-            if (game.game_over()) return;
+            if (tournamentMatchActive || game.game_over()) return;
             const turn = game.turn();
             clock[turn]--;
             if (clock[turn] <= 0) {
@@ -1186,6 +1192,12 @@
       }
 
       function updateClockDisplay() {
+        // Durante una partida de torneo el reloj que manda es el de
+        // Firestore (ver updateTournamentClockDisplay): si esta función
+        // sigue pintando encima de los mismos elementos #clock-w/#clock-b
+        // con el reloj local de "Jugar", cada pantalla termina mostrando
+        // un tiempo distinto según el estado local de cada navegador.
+        if (tournamentMatchActive) return;
         const w = document.getElementById("clock-w");
         const b = document.getElementById("clock-b");
         w.textContent = formatTime(clock.w);
@@ -4753,6 +4765,11 @@
           tournamentMatchCtx = { round, board, whiteName, blackName, whiteEmail: whiteEmail || "", blackEmail: blackEmail || "" };
           tournamentMatchActive = true;
           clearOpponentMoveHighlight();
+          // Por si quedó corriendo el reloj local de una partida normal sin
+          // terminar: paramos ese timer para que no siga descontando tiempo
+          // ni pisando el reloj del torneo (ver updateClockDisplay/addIncrement).
+          clearInterval(clockTimer);
+          clockTimer = null;
 
           botEnabled = false;
           gameStarted = true;
