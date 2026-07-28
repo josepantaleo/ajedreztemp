@@ -427,6 +427,73 @@
         }
       }
 
+      // Calcula la posición (0-100%) de una casilla dentro de la grilla
+      // del tablero tal como quedó dibujada en este render (respeta el
+      // flip del tablero, ya que "rows"/"cols" reflejan el orden real de
+      // inserción en el DOM).
+      function squareDisplayPercent(sqName, rows, cols, squares) {
+        const file = squares.indexOf(sqName[0]);
+        const rank = parseInt(sqName[1], 10);
+        const r = 8 - rank;
+        const displayRow = rows.indexOf(r);
+        const displayCol = cols.indexOf(file);
+        if (displayRow === -1 || displayCol === -1) return null;
+        return { x: (displayCol + 0.5) * 12.5, y: (displayRow + 0.5) * 12.5 };
+      }
+
+      // Construye una flecha SVG semitransparente que marca la "ruta" de
+      // una jugada (de dónde a dónde se movió la pieza). Se usa para que,
+      // en una partida de torneo, el rival vea claramente por dónde se
+      // movió la pieza cuando llega la jugada por Firebase.
+      function buildOpponentMoveArrow(fromSq, toSq, rows, cols, squares) {
+        const p1 = squareDisplayPercent(fromSq, rows, cols, squares);
+        const p2 = squareDisplayPercent(toSq, rows, cols, squares);
+        if (!p1 || !p2) return null;
+
+        const svgNS = "http://www.w3.org/2000/svg";
+        const svg = document.createElementNS(svgNS, "svg");
+        svg.setAttribute("viewBox", "0 0 100 100");
+        svg.classList.add("opp-move-arrow-overlay");
+
+        const defs = document.createElementNS(svgNS, "defs");
+        const marker = document.createElementNS(svgNS, "marker");
+        marker.setAttribute("id", "oppMoveArrowHead");
+        marker.setAttribute("viewBox", "0 0 10 10");
+        marker.setAttribute("refX", "7");
+        marker.setAttribute("refY", "5");
+        marker.setAttribute("markerWidth", "4.2");
+        marker.setAttribute("markerHeight", "4.2");
+        marker.setAttribute("orient", "auto-start-reverse");
+        const arrowHeadPath = document.createElementNS(svgNS, "path");
+        arrowHeadPath.setAttribute("d", "M0,0 L10,5 L0,10 z");
+        arrowHeadPath.setAttribute("fill", "rgba(70, 160, 255, 0.9)");
+        marker.appendChild(arrowHeadPath);
+        defs.appendChild(marker);
+        svg.appendChild(defs);
+
+        // Acortamos un poco la línea para que la punta de flecha no quede
+        // tapada por la pieza en la casilla de destino.
+        const dx = p2.x - p1.x;
+        const dy = p2.y - p1.y;
+        const len = Math.sqrt(dx * dx + dy * dy) || 1;
+        const shorten = 4;
+        const endX = p2.x - (dx / len) * shorten;
+        const endY = p2.y - (dy / len) * shorten;
+
+        const line = document.createElementNS(svgNS, "line");
+        line.setAttribute("x1", p1.x);
+        line.setAttribute("y1", p1.y);
+        line.setAttribute("x2", endX);
+        line.setAttribute("y2", endY);
+        line.setAttribute("stroke", "rgba(70, 160, 255, 0.9)");
+        line.setAttribute("stroke-width", "2.4");
+        line.setAttribute("stroke-linecap", "round");
+        line.setAttribute("marker-end", "url(#oppMoveArrowHead)");
+        svg.appendChild(line);
+
+        return svg;
+      }
+
       // Calcula el conjunto de casillas ocupadas por piezas de "colorToMove"
       // que serían alcanzables si le tocara mover a ese color en esta posición.
       // Se usa para deducir qué piezas están bajo ataque (amenazadas).
@@ -462,6 +529,21 @@
           }
         }
         return threatened;
+      }
+
+      // Resalta por unos segundos la casilla de origen y destino de la
+      // última jugada recibida del rival en una partida de torneo (ver
+      // handleLiveMatchUpdate), y dibuja la flecha de la ruta en render().
+      // Declarada acá arriba, antes de render(), porque render() se llama
+      // muy temprano al cargar la página (antes de que existiera esta
+      // variable si se declaraba más abajo, lo que rompía toda la carga).
+      let opponentMoveHighlight = null; // { from, to }
+      let opponentMoveHighlightTimer = null;
+
+      function clearOpponentMoveHighlight() {
+        clearTimeout(opponentMoveHighlightTimer);
+        opponentMoveHighlightTimer = null;
+        opponentMoveHighlight = null;
       }
 
       function render() {
@@ -503,6 +585,14 @@
               if (lastM.from === sqName || lastM.to === sqName) {
                 square.classList.add("last");
               }
+            }
+
+            // Partidas de torneo: al recibir la jugada del rival se recarga
+            // el FEN y se pierde el historial local, así que la casilla
+            // "last" de arriba no alcanza a marcarse. Usamos en su lugar
+            // este resaltado temporal (se apaga solo a los pocos segundos).
+            if (opponentMoveHighlight && (opponentMoveHighlight.from === sqName || opponentMoveHighlight.to === sqName)) {
+              square.classList.add("opp-move");
             }
 
             const pieceObj = game.get(sqName);
@@ -553,6 +643,14 @@
             square.onclick = () => clickSquare(sqName);
             board.appendChild(square);
           }
+        }
+
+        // Flecha que traza la ruta (origen → destino) de la última jugada
+        // del rival recibida por Firebase, mientras dure el resaltado
+        // temporal (ver opponentMoveHighlight / handleLiveMatchUpdate).
+        if (opponentMoveHighlight && opponentMoveHighlight.from && opponentMoveHighlight.to) {
+          const arrowSvg = buildOpponentMoveArrow(opponentMoveHighlight.from, opponentMoveHighlight.to, rows, cols, squares);
+          if (arrowSvg) board.appendChild(arrowSvg);
         }
 
         if (justMovedAnim) {
@@ -3525,9 +3623,29 @@
 
       async function fbCreateTournament(name, playerEntries, totalRounds, adminEmails) {
         if (!isBootstrapping(lastTournamentState)) assertAdmin();
+        const seenEmails = new Set();
+        for (const p of playerEntries) {
+          if (!p.name) continue;
+          const email = (p.email || "").toLowerCase().trim();
+          if (email && !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) {
+            throw new Error(`El email "${p.email}" de ${p.name} no parece válido`);
+          }
+          if (email) {
+            if (seenEmails.has(email)) throw new Error(`El email ${email} está repetido entre los jugadores`);
+            seenEmails.add(email);
+          }
+        }
         const players = playerEntries
           .filter((p) => p.name)
-          .map((p, i) => ({ id: "p" + (i + 1), name: p.name, email: (p.email || "").toLowerCase(), points: 0, played: [], byes: 0 }));
+          .map((p, i) => ({
+            id: "p" + (i + 1),
+            name: p.name,
+            email: (p.email || "").toLowerCase(),
+            points: 0,
+            played: [],
+            byes: 0,
+            colorBalance: 0, // >0 jugó más veces con blancas, <0 más veces con negras
+          }));
         const rounds = Number(totalRounds);
         await fbRoomRef.set({
           meta: {
@@ -3593,6 +3711,8 @@
 
           let unpaired = pool.slice();
           const newPairings = [];
+          const colorBalanceById = {};
+          players.forEach((p) => (colorBalanceById[p.id] = p.colorBalance || 0));
           let board = 1;
 
           while (unpaired.length > 0) {
@@ -3600,15 +3720,27 @@
             let idx = unpaired.findIndex((p) => p1.played.indexOf(p.id) === -1);
             if (idx === -1) idx = 0;
             const p2 = unpaired.splice(idx, 1)[0];
+
+            // Reparto de color: le damos blancas a quien tenga menor
+            // colorBalance (es decir, quien jugó menos veces con blancas
+            // hasta ahora). En empate, mantenemos p1 con blancas.
+            const bal1 = colorBalanceById[p1.id] || 0;
+            const bal2 = colorBalanceById[p2.id] || 0;
+            const p1GetsWhite = bal1 <= bal2;
+            const white = p1GetsWhite ? p1 : p2;
+            const black = p1GetsWhite ? p2 : p1;
+            colorBalanceById[white.id] = (colorBalanceById[white.id] || 0) + 1;
+            colorBalanceById[black.id] = (colorBalanceById[black.id] || 0) - 1;
+
             newPairings.push({
               round: nextRound,
               board: board++,
-              whiteId: p1.id,
-              whiteName: p1.name,
-              whiteEmail: p1.email || "",
-              blackId: p2.id,
-              blackName: p2.name,
-              blackEmail: p2.email || "",
+              whiteId: white.id,
+              whiteName: white.name,
+              whiteEmail: white.email || "",
+              blackId: black.id,
+              blackName: black.name,
+              blackEmail: black.email || "",
               result: "",
             });
           }
@@ -3629,9 +3761,12 @@
             byePlayer.byes += 1;
           }
 
-          const updatedPlayers = players.map((p) =>
-            byePlayer && p.id === byePlayer.id ? { ...p, points: byePlayer.points, byes: byePlayer.byes } : p
-          );
+          const updatedPlayers = players.map((p) => {
+            if (byePlayer && p.id === byePlayer.id) {
+              return { ...p, points: byePlayer.points, byes: byePlayer.byes, colorBalance: colorBalanceById[p.id] || 0 };
+            }
+            return { ...p, colorBalance: colorBalanceById[p.id] || 0 };
+          });
 
           const newGames = newPairings
             .filter((p) => p.blackId !== "")
@@ -3662,6 +3797,16 @@
           const target = pairings.find((p) => p.round === round && p.board === board);
           if (!target) throw new Error("No se encontró esa partida");
           if (target.blackId === "") throw new Error("Esa fila es un BYE, no se puede cambiar");
+
+          // Solo el administrador o alguno de los dos jugadores de esta
+          // partida puede cargar/cambiar su resultado (evita que cualquier
+          // usuario cargue resultados de partidas ajenas).
+          const myEmail = currentUser ? currentUser.email : "";
+          const isParticipant =
+            myEmail && ((target.whiteEmail || "").toLowerCase() === myEmail || (target.blackEmail || "").toLowerCase() === myEmail);
+          if (!isCurrentUserAdmin(lastTournamentState) && !isParticipant) {
+            throw new Error("No tenés permiso para cargar el resultado de esta partida");
+          }
 
           // Si ya había un resultado cargado antes, primero deshacemos sus puntos.
           applyResultToPlayers_(byId[target.whiteId], byId[target.blackId], target.result, -1);
@@ -3731,7 +3876,7 @@
         return getTournamentStateOnce();
       }
 
-      async function fbMakeMove(round, board, fen, lastMoveSan, gameOverResult) {
+      async function fbMakeMove(round, board, fen, lastMoveSan, gameOverResult, lastFrom, lastTo) {
         round = Number(round);
         board = Number(board);
         await fbDb.runTransaction(async (tx) => {
@@ -3744,6 +3889,12 @@
           if (g.status === "finished") throw new Error("Esa partida ya terminó");
           g.fen = fen;
           g.lastMoveSan = lastMoveSan || "";
+          // Guardamos también origen/destino de la jugada para que el rival
+          // pueda ver por unos segundos por dónde se movió la pieza (ver
+          // handleLiveMatchUpdate). Si no vienen (p. ej. al rendirse o
+          // acordar tablas sin mover), dejamos lo que ya había guardado.
+          if (lastFrom) g.lastFrom = lastFrom;
+          if (lastTo) g.lastTo = lastTo;
           if (gameOverResult) g.status = "finished";
           tx.update(fbRoomRef, { games });
         });
@@ -3768,13 +3919,38 @@
 
       // Ordena jugadores por puntos y, en caso de empate, por Buchholz
       // (suma de los puntos de todos los rivales que enfrentó cada uno).
-      function rankPlayers_(players) {
+      function rankPlayers_(players, pairings) {
         const byId = {};
         players.forEach((p) => (byId[p.id] = p));
+
+        // V-E-D (victorias / empates / derrotas) por jugador, calculado a
+        // partir de los pairings con resultado cargado. Los byes cuentan
+        // como victoria.
+        const record = {};
+        players.forEach((p) => (record[p.id] = { w: 0, d: 0, l: 0 }));
+        (pairings || []).forEach((pr) => {
+          if (!pr.result || !record[pr.whiteId]) return;
+          if (pr.blackId === "") {
+            record[pr.whiteId].w += 1; // bye
+            return;
+          }
+          if (!record[pr.blackId]) return;
+          if (pr.result === "1-0") {
+            record[pr.whiteId].w += 1;
+            record[pr.blackId].l += 1;
+          } else if (pr.result === "0-1") {
+            record[pr.whiteId].l += 1;
+            record[pr.blackId].w += 1;
+          } else if (pr.result === "1/2-1/2") {
+            record[pr.whiteId].d += 1;
+            record[pr.blackId].d += 1;
+          }
+        });
+
         return players
           .map((p) => {
             const buchholz = (p.played || []).reduce((sum, oppId) => sum + (byId[oppId] ? byId[oppId].points : 0), 0);
-            return { ...p, _buchholz: Math.round(buchholz * 100) / 100 };
+            return { ...p, _buchholz: Math.round(buchholz * 100) / 100, _record: record[p.id] || { w: 0, d: 0, l: 0 } };
           })
           .sort((a, b) => {
             if (b.points !== a.points) return b.points - a.points;
@@ -3821,7 +3997,7 @@
 
         const bannerEl = document.getElementById("tournament-champion-banner");
         if (isFinished) {
-          const ranked = rankPlayers_(state.players);
+          const ranked = rankPlayers_(state.players, state.pairings);
           const topScore = ranked.length ? ranked[0].points : 0;
           const topTB = ranked.length ? ranked[0]._buchholz : 0;
           const champions = ranked.filter((p) => p.points === topScore && p._buchholz === topTB);
@@ -3921,7 +4097,7 @@
         });
 
         const standingsEl = document.getElementById("tournament-standings-list");
-        const ranked2 = rankPlayers_(state.players);
+        const ranked2 = rankPlayers_(state.players, state.pairings);
         let rows = ranked2
           .map(
             (p, i) => `
@@ -3930,17 +4106,18 @@
               <td>${p.name}</td>
               <td>${p.points}</td>
               <td>${p._buchholz}</td>
+              <td>${p._record.w}-${p._record.d}-${p._record.l}</td>
               <td>${p.played.length}</td>
             </tr>`
           )
           .join("");
         standingsEl.innerHTML = `
           <table class="standings-table">
-            <thead><tr><th>#</th><th>Jugador</th><th>Puntos</th><th>Buchholz</th><th>Partidas</th></tr></thead>
+            <thead><tr><th>#</th><th>Jugador</th><th>Puntos</th><th>Buchholz</th><th>V-E-D</th><th>Partidas</th></tr></thead>
             <tbody>${rows}</tbody>
           </table>
           <p class="muted" style="font-size: 12px; margin-top: 8px">
-            Buchholz = suma de puntos de los rivales que enfrentó cada jugador (desempate).
+            Buchholz = suma de puntos de los rivales que enfrentó cada jugador (desempate). V-E-D = victorias-empates-derrotas (el bye cuenta como victoria).
           </p>
         `;
       }
@@ -4002,6 +4179,14 @@
           game.load(gameRow.fen);
           selected = null;
           validMoves = [];
+          if (gameRow.lastFrom && gameRow.lastTo) {
+            opponentMoveHighlight = { from: gameRow.lastFrom, to: gameRow.lastTo };
+            clearTimeout(opponentMoveHighlightTimer);
+            opponentMoveHighlightTimer = setTimeout(() => {
+              opponentMoveHighlight = null;
+              render();
+            }, 3000);
+          }
           render();
         }
         updateTournamentMatchBar(gameRow);
@@ -4018,6 +4203,7 @@
 
           tournamentMatchCtx = { round, board, whiteName, blackName, whiteEmail: whiteEmail || "", blackEmail: blackEmail || "" };
           tournamentMatchActive = true;
+          clearOpponentMoveHighlight();
 
           botEnabled = false;
           gameStarted = true;
@@ -4063,6 +4249,7 @@
       function exitTournamentMatch() {
         tournamentMatchActive = false;
         tournamentMatchCtx = null;
+        clearOpponentMoveHighlight();
 
         document.getElementById("tournament-match-bar").style.display = "none";
         const controlsPanel = document.querySelector("#page-jugar .controls-panel");
@@ -4095,12 +4282,15 @@
           } else if (game.in_draw() || game.in_stalemate() || game.insufficient_material() || game.in_threefold_repetition()) {
             gameOverResult = "1/2-1/2";
           }
+          const lastVerboseMove = game.history({ verbose: true }).slice(-1)[0];
           const state = await fbMakeMove(
             tournamentMatchCtx.round,
             tournamentMatchCtx.board,
             game.fen(),
             game.history().slice(-1)[0] || "",
-            gameOverResult
+            gameOverResult,
+            lastVerboseMove ? lastVerboseMove.from : "",
+            lastVerboseMove ? lastVerboseMove.to : ""
           );
           const gameRow = (state.games || []).find(
             (g) => g.round === tournamentMatchCtx.round && g.board === tournamentMatchCtx.board
@@ -4211,6 +4401,10 @@
           toast("❌ Cada jugador necesita su email de Gmail (formato: Nombre, email)");
           return;
         }
+        if (totalRounds && (!/^\d+$/.test(totalRounds) || Number(totalRounds) < 1)) {
+          toast("❌ La cantidad de rondas tiene que ser un número entero mayor a 0 (o dejalo vacío)");
+          return;
+        }
         if (!fbRoomRef) {
           toast("❌ Primero conectate a tu proyecto de Firebase");
           return;
@@ -4269,6 +4463,10 @@
           assertAdmin();
           const name = document.getElementById("tournament-settings-name-input").value.trim() || "Torneo";
           const roundsRaw = document.getElementById("tournament-settings-rounds-input").value.trim();
+          if (roundsRaw && (!/^\d+$/.test(roundsRaw) || Number(roundsRaw) < 1)) {
+            toast("❌ La cantidad de rondas tiene que ser un número entero mayor a 0 (o dejalo vacío)");
+            return;
+          }
           const totalRounds = roundsRaw ? Number(roundsRaw) : null;
           await fbUpdateSettings(name, totalRounds, [TOURNAMENT_ADMIN_EMAIL]);
           document.getElementById("tournament-settings-panel").style.display = "none";
