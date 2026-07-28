@@ -786,6 +786,10 @@
           if (!gameStarted || game.game_over() || botThinking) return;
           if (botEnabled && game.turn() === botColor) return;
           if (tournamentMatchActive && game.turn() !== tournamentMyColor()) return;
+          if (tournamentMatchActive && tournamentClockWaitingForBothPlayers()) {
+            toast("⏳ Esperando a que el rival entre a la partida.");
+            return;
+          }
           const piece = game.get(sqName);
           if (!piece || piece.color !== game.turn()) return;
 
@@ -902,6 +906,10 @@
         if (!gameStarted || game.game_over() || botThinking) return;
         if (botEnabled && game.turn() === botColor) return;
         if (tournamentMatchActive && game.turn() !== tournamentMyColor()) return;
+        if (tournamentMatchActive && tournamentClockWaitingForBothPlayers()) {
+          toast("⏳ Esperando a que el rival entre a la partida.");
+          return;
+        }
 
         if (selected === sqName) {
           selected = null;
@@ -3876,13 +3884,16 @@
         });
 
         // Reloj de la partida: si el torneo tiene tiempo configurado, cada
-        // partida arranca con ese tiempo para las dos partes y empieza a
-        // correr desde que se generó la ronda (como el reloj de una ronda
-        // presencial). turnStartAt se usa para calcular, en cada jugada,
-        // cuánto tiempo real pasó desde la última vez que se guardó el reloj.
+        // partida arranca con ese tiempo para las dos partes (se reinicia en
+        // cada ronda: cada partida nueva tiene su propio objeto "clock"
+        // desde cero). El reloj NO arranca a correr solo — turnStartAt
+        // queda en null hasta que se juega la primera jugada (ver
+        // fbMakeMove), y mientras tanto "joined" registra si cada jugador ya
+        // entró a la partida: hasta que entraron los dos no se deja mover
+        // (ver tournamentClockWaitingForBothPlayers), así ninguno pierde
+        // tiempo de reloj por ausencia del rival.
         const minutes = (timeControl && timeControl.minutes) || 0;
         const increment = (timeControl && timeControl.increment) || 0;
-        const now = Date.now();
         const newGames = newPairings
           .filter((p) => p.blackId !== "")
           .map((p) => ({
@@ -3892,8 +3903,9 @@
             lastMoveSan: "",
             status: "ongoing",
             clock: minutes > 0 ? { w: minutes * 60, b: minutes * 60 } : null,
-            turnStartAt: minutes > 0 ? now : null,
+            turnStartAt: null,
             increment: increment,
+            joined: { w: false, b: false },
           }));
 
         return { nextRound, newPairings, updatedPlayers, newGames };
@@ -4154,14 +4166,29 @@
           if (!g) throw new Error("No se encontró esa partida");
           if (g.status === "finished") throw new Error("Esa partida ya terminó");
 
+          // En una partida con reloj no se deja mover hasta que entraron los
+          // dos jugadores (ver "joined"/fbMarkJoined): si uno mueve antes de
+          // que el otro esté presente, el reloj del rival empezaría a
+          // correr mientras no está mirando la pantalla. Esto es un
+          // resguardo extra del lado del servidor; el botón de mover ya
+          // está bloqueado del lado del cliente en ese caso.
+          if (g.clock && fen !== g.fen) {
+            const joined = g.joined || { w: false, b: false };
+            if (!joined.w || !joined.b) {
+              throw new Error("Todavía no entraron los dos jugadores a la partida");
+            }
+          }
+
           // Si la partida tiene reloj y esto es una jugada real (cambió el
           // FEN), le descontamos a quien acaba de mover el tiempo que pasó
           // desde su último turno, y le sumamos el incremento si corresponde
           // (resignación/tablas/abandono por tiempo no mueven pieza, así que
-          // no tocan el reloj acá).
+          // no tocan el reloj acá). Si es la primera jugada de la partida
+          // (turnStartAt todavía en null), no se descuenta nada: el reloj
+          // recién empieza a correr a partir de esta jugada.
           if (g.clock && fen !== g.fen) {
             const moverColor = new Chess(g.fen).turn();
-            const elapsed = Math.max(0, Math.round((Date.now() - (g.turnStartAt || Date.now())) / 1000));
+            const elapsed = g.turnStartAt ? Math.max(0, Math.round((Date.now() - g.turnStartAt) / 1000)) : 0;
             g.clock = { ...g.clock, [moverColor]: Math.max(0, g.clock[moverColor] - elapsed) };
             if (!gameOverResult && g.increment) {
               g.clock = { ...g.clock, [moverColor]: g.clock[moverColor] + g.increment };
@@ -4184,6 +4211,29 @@
           return fbSubmitResult(round, board, gameOverResult);
         }
         return getTournamentStateOnce();
+      }
+
+      // Marca que un jugador (color "w" o "b") entró a mirar/jugar su
+      // partida de torneo. Solo importa para partidas con reloj: hasta que
+      // los dos entraron al menos una vez, no se puede mover (así ninguno
+      // pierde tiempo de reloj por no haber llegado todavía). Cualquiera de
+      // los dos jugadores puede marcar su propia presencia, no hace falta
+      // ser administrador.
+      async function fbMarkJoined(round, board, color) {
+        round = Number(round);
+        board = Number(board);
+        await fbDb.runTransaction(async (tx) => {
+          const snap = await tx.get(fbRoomRef);
+          if (!snap.exists) return;
+          const data = snap.data();
+          const games = (data.games || []).map((g) => ({ ...g }));
+          const g = games.find((x) => x.round === round && x.board === board);
+          if (!g || !g.clock) return; // sin reloj no hace falta llevar presencia
+          const joined = g.joined || { w: false, b: false };
+          if (joined[color]) return; // ya estaba marcado: no hace falta escribir de nuevo
+          g.joined = { ...joined, [color]: true };
+          tx.update(fbRoomRef, { games });
+        });
       }
 
       async function fbResetAll() {
@@ -4389,12 +4439,15 @@
               return;
             }
             const game = (state.games || []).find((g) => g.round === p.round && g.board === p.board);
+            const bothJoined = !game || !game.clock || ((game.joined || {}).w && (game.joined || {}).b);
             const gameStatusText = !game
               ? ""
               : game.status === "finished"
               ? "Partida terminada"
               : game.lastMoveSan
               ? "En juego · última jugada: " + game.lastMoveSan
+              : game.clock && !bothJoined
+              ? "⏳ Esperando jugadores"
               : "Sin empezar";
             const isMyGame =
               (p.whiteEmail && p.whiteEmail.toLowerCase() === myEmail) || (p.blackEmail && p.blackEmail.toLowerCase() === myEmail);
@@ -4414,9 +4467,11 @@
               : p.result
               ? `<span class="muted">${resultLabel(p.result)}</span>`
               : "";
-            const playBtnHtml = canPlay
-              ? `<button class="btn" data-play-round="${p.round}" data-play-board="${p.board}" data-white="${p.whiteName}" data-black="${p.blackName}" data-white-email="${p.whiteEmail || ""}" data-black-email="${p.blackEmail || ""}">▶️ Jugar</button>`
-              : "";
+            // Cualquiera puede entrar a mirar una partida del torneo, esté o
+            // no registrado (no hace falta ser jugador ni admin): si no le
+            // toca jugar esa partida, entra como espectador (ver
+            // enterTournamentMatch / tournamentMyColor).
+            const playBtnHtml = `<button class="btn" data-play-round="${p.round}" data-play-board="${p.board}" data-white="${p.whiteName}" data-black="${p.blackName}" data-white-email="${p.whiteEmail || ""}" data-black-email="${p.blackEmail || ""}">${canPlay ? "▶️ Jugar" : "👁️ Ver"}</button>`;
             row.innerHTML = `
               <div class="pairing-board">#${p.board}</div>
               <div class="pairing-names">${p.whiteName}<span class="vs">vs</span>${p.blackName}
@@ -4550,6 +4605,16 @@
         return "";
       }
 
+      // En una partida de torneo con reloj, no se deja mover hasta que
+      // entraron los dos jugadores (así ninguno pierde tiempo de reloj por
+      // no haber llegado todavía). Sin reloj esto no aplica.
+      function tournamentClockWaitingForBothPlayers() {
+        const gameRow = tournamentCurrentGameRow;
+        if (!gameRow || !gameRow.clock) return false;
+        const joined = gameRow.joined || { w: false, b: false };
+        return !(joined.w && joined.b);
+      }
+
       function updateTournamentMatchBar(gameRow) {
         if (!tournamentMatchActive || !tournamentMatchCtx) return;
         const statusEl = document.getElementById("tournament-match-status");
@@ -4570,11 +4635,17 @@
         }
         const turn = game.turn();
         const turnName = turn === "w" ? tournamentMatchCtx.whiteName : tournamentMatchCtx.blackName;
-        statusEl.textContent = !myColor
-          ? `Turno de ${turnName}.`
-          : myColor === turn
-          ? `¡Tu turno! Jugás con ${myColor === "w" ? "blancas" : "negras"}.`
-          : `Turno de ${turnName}. Esperando la jugada...`;
+        if (tournamentClockWaitingForBothPlayers()) {
+          const joined = (gameRow && gameRow.joined) || { w: false, b: false };
+          const missing = !joined.w ? tournamentMatchCtx.whiteName : tournamentMatchCtx.blackName;
+          statusEl.textContent = `⏳ Esperando a que entre ${missing}. El reloj arranca recién con la primera jugada.`;
+        } else {
+          statusEl.textContent = !myColor
+            ? `Turno de ${turnName}.`
+            : myColor === turn
+            ? `¡Tu turno! Jugás con ${myColor === "w" ? "blancas" : "negras"}.`
+            : `Turno de ${turnName}. Esperando la jugada...`;
+        }
       }
 
       // Se llama automáticamente cada vez que llega una actualización en
@@ -4736,6 +4807,13 @@
           } else {
             spectatorNote.style.display = "none";
             controlsEl.style.display = "flex";
+            if (gameRow.clock) {
+              // Avisa que este jugador ya está presente; hasta que los dos
+              // no entraron a la partida no se puede mover (ver
+              // tournamentClockWaitingForBothPlayers), así ninguno pierde
+              // tiempo de reloj por no haber llegado todavía.
+              fbMarkJoined(round, board, myColor).catch(() => {});
+            }
           }
 
           render();
