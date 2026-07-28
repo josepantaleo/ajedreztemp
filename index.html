@@ -1719,7 +1719,14 @@
                 mira en modo espectador.
               </p>
 
-              <div id="tournament-connect-box">
+              <!-- Esta caja queda oculta a propósito: la configuración de
+                   Firebase de la escuela ya está fija en el código
+                   (DEFAULT_FIREBASE_CONFIG en app.js) y la conexión se hace
+                   sola al entrar a esta página, así que no hace falta
+                   mostrarle estos datos a los alumnos. Se deja el bloque en
+                   el HTML (oculto) por si en algún momento hiciera falta
+                   reconectar a otro proyecto de Firebase manualmente. -->
+              <div id="tournament-connect-box" style="display: none">
                 <label style="display: block; margin-bottom: 8px; font-weight: 600"
                   >Configuración de Firebase (pegar el objeto "firebaseConfig" de tu proyecto)</label
                 >

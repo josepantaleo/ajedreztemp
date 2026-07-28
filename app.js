@@ -313,6 +313,10 @@
 
       function maybeTriggerBotMove() {
         if (tournamentMatchActive) {
+          if (opponentMoveHighlight) {
+            clearOpponentMoveHighlight();
+            render();
+          }
           syncTournamentMove();
           return;
         }
@@ -1441,6 +1445,12 @@
 
         const clockEl = gameCard.querySelector(".clock");
         const controlsEl = gameCard.querySelector(".controls-panel");
+        // Barra de torneo (título + estado + botones abandonar/tablas): sigue
+        // visible durante una partida de torneo y ocupa espacio real, así
+        // que hay que descontarla o el tablero se calcula más grande de lo
+        // que cabe y empuja los controles (Pantalla completa incluido)
+        // fuera de la vista.
+        const tournamentBarEl = document.getElementById("tournament-match-bar");
         const cardStyle = getComputedStyle(gameCard);
         const gap = parseFloat(cardStyle.rowGap || cardStyle.gap || "12") || 12;
         const paddingV =
@@ -1453,9 +1463,13 @@
         const cardRect = gameCard.getBoundingClientRect();
         const clockH = clockEl ? clockEl.getBoundingClientRect().height : 0;
         const controlsH = controlsEl ? controlsEl.getBoundingClientRect().height : 0;
+        const tournamentBarH =
+          tournamentBarEl && tournamentBarEl.offsetParent !== null
+            ? tournamentBarEl.getBoundingClientRect().height
+            : 0;
 
         const availableH =
-          (cardRect.height || viewportH) - clockH - controlsH - gap * 2 - paddingV;
+          (cardRect.height || viewportH) - clockH - controlsH - tournamentBarH - gap * 2 - paddingV;
         const availableW = (cardRect.width || viewportW) - paddingH;
 
         const side = Math.max(140, Math.floor(Math.min(availableW, availableH)));
@@ -1488,8 +1502,10 @@
           ro.observe(gameCard);
           const clockEl = gameCard.querySelector(".clock");
           const controlsEl = gameCard.querySelector(".controls-panel");
+          const tournamentBarEl = document.getElementById("tournament-match-bar");
           if (clockEl) ro.observe(clockEl);
           if (controlsEl) ro.observe(controlsEl);
+          if (tournamentBarEl) ro.observe(tournamentBarEl);
         }
       })();
 
@@ -4214,12 +4230,12 @@
           selected = null;
           validMoves = [];
           if (gameRow.lastFrom && gameRow.lastTo) {
-            opponentMoveHighlight = { from: gameRow.lastFrom, to: gameRow.lastTo };
+            // Antes se apagaba solo a los 3 segundos, pero si el jugador
+            // no estaba mirando la pantalla justo en ese momento se lo
+            // perdía. Ahora queda marcado hasta que el jugador haga su
+            // propia jugada (se limpia en maybeTriggerBotMove).
             clearTimeout(opponentMoveHighlightTimer);
-            opponentMoveHighlightTimer = setTimeout(() => {
-              opponentMoveHighlight = null;
-              render();
-            }, 3000);
+            opponentMoveHighlight = { from: gameRow.lastFrom, to: gameRow.lastTo };
           }
           render();
         }
@@ -4283,6 +4299,7 @@
 
           render();
           updateTournamentMatchBar(gameRow);
+          requestAnimationFrame(sizeFullscreenBoard);
         } catch (err) {
           toast("❌ No se pudo abrir la partida: " + err.message);
         }
