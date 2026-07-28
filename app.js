@@ -390,6 +390,15 @@
 
       let gameStarted = false;
 
+      // -------- Partida de torneo jugada en el tablero grande de "Jugar" --------
+      // (declaradas acá arriba, junto con el resto del estado, porque
+      // render() ya las usa y se llama mucho antes de llegar a donde
+      // estaban originalmente declaradas más abajo en el archivo)
+      let tournamentMatchActive = false;
+      let tournamentMatchCtx = null; // {round, board, whiteName, blackName, whiteEmail, blackEmail}
+      let tournamentMatchBusy = false;
+      let tournamentResultShown = false; // evita mostrar el popup de fin de partida más de una vez
+
       function animateMoveTransition(board, anim, movedPieceEl, capturedSquareEl) {
         const fromEl = anim.from ? board.querySelector(`[data-square="${anim.from}"]`) : null;
         const toEl = anim.to ? board.querySelector(`[data-square="${anim.to}"]`) : null;
@@ -4156,12 +4165,6 @@
           document.getElementById("tournament-connect-status").classList.remove("correct");
         }
       }
-
-      // -------- Partida de torneo jugada en el tablero grande de "Jugar" --------
-      let tournamentMatchActive = false;
-      let tournamentMatchCtx = null; // {round, board, whiteName, blackName, whiteEmail, blackEmail}
-      let tournamentMatchBusy = false;
-      let tournamentResultShown = false; // evita mostrar el popup de fin de partida más de una vez
 
       // Arma el texto del popup de fin de partida de torneo a partir del
       // resultado (1-0 / 0-1 / 1/2-1/2), aclarando si ganó/perdió/empató
