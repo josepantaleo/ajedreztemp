@@ -1200,8 +1200,10 @@
         if (tournamentMatchActive) return;
         const w = document.getElementById("clock-w");
         const b = document.getElementById("clock-b");
-        w.textContent = formatTime(clock.w);
-        b.textContent = formatTime(clock.b);
+        const wTime = w.querySelector(".clock-time");
+        const bTime = b.querySelector(".clock-time");
+        (wTime || w).textContent = formatTime(clock.w);
+        (bTime || b).textContent = formatTime(clock.b);
         w.classList.toggle("active", game.turn() === "w" && !game.game_over());
         b.classList.toggle("active", game.turn() === "b" && !game.game_over());
       }
@@ -4918,8 +4920,10 @@
         };
         const wSecs = Math.max(0, remaining.w);
         const bSecs = Math.max(0, remaining.b);
-        wEl.textContent = formatTime(wSecs);
-        bEl.textContent = formatTime(bSecs);
+        const wTime = wEl.querySelector(".clock-time");
+        const bTime = bEl.querySelector(".clock-time");
+        (wTime || wEl).textContent = formatTime(wSecs);
+        (bTime || bEl).textContent = formatTime(bSecs);
         wEl.classList.toggle("active", turn === "w" && !finished);
         bEl.classList.toggle("active", turn === "b" && !finished);
 
@@ -4993,6 +4997,13 @@
           document.getElementById("tournament-match-bar").style.display = "";
           document.getElementById("tournament-match-title").textContent =
             `🏆 Torneo · Ronda ${round}, tablero #${board}: ${whiteName} vs ${blackName}`;
+          // Nombres de los jugadores sobre cada lado del reloj, para que se
+          // vea claramente quién juega con blancas y quién con negras
+          // directamente en el tablero (no solo en el título de arriba).
+          const clockWNameEl = document.getElementById("clock-w-name");
+          const clockBNameEl = document.getElementById("clock-b-name");
+          if (clockWNameEl) clockWNameEl.textContent = whiteName || "";
+          if (clockBNameEl) clockBNameEl.textContent = blackName || "";
           // Se ocultan los botones que no aplican a una partida de torneo
           // (iniciar partida nueva, deshacer, rendirse "normal" y copiar
           // partida, ya que el torneo tiene sus propios botones de
@@ -5067,6 +5078,13 @@
         });
         const clockEl = document.querySelector("#page-jugar .clock");
         if (clockEl) clockEl.style.display = "";
+        // Se borran los nombres de jugador que quedaron pegados al reloj
+        // durante la partida de torneo, para que no aparezcan en partidas
+        // normales contra la IA o pasar y jugar.
+        const clockWNameEl = document.getElementById("clock-w-name");
+        const clockBNameEl = document.getElementById("clock-b-name");
+        if (clockWNameEl) clockWNameEl.textContent = "";
+        if (clockBNameEl) clockBNameEl.textContent = "";
 
         ["modo-educativo-panel", "ayuda-educativa-panel", "tutor-card"].forEach((id) => {
           const el = document.getElementById(id);

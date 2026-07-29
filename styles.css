@@ -907,6 +907,17 @@
         box-shadow: 0 0 30px rgba(242, 184, 75, 0.4) !important;
       }
 
+      body.fullscreen-game .clock-player-name {
+        font-size: clamp(0.65rem, 1.6vh, 0.85rem) !important;
+        letter-spacing: normal !important;
+        color: rgba(255, 255, 255, 0.75) !important;
+        text-shadow: none !important;
+      }
+
+      body.fullscreen-game .clock div.active .clock-player-name {
+        color: #ffeaad !important;
+      }
+
       /* El tablero ocupa todo el espacio disponible entre el reloj y
          los controles. El tamaño exacto (cuadrado, sin recortes) lo
          calcula JS con precisión en cada resize/orientationchange,
@@ -1485,6 +1496,26 @@
         border: 2px solid transparent;
         border-radius: 10px;
         font: 700 1.5rem monospace;
+      }
+
+      .clock-player-name {
+        display: block;
+        font: 600 0.8rem/1.2 inherit;
+        font-family: system-ui, sans-serif;
+        color: var(--muted);
+        white-space: nowrap;
+        overflow: hidden;
+        text-overflow: ellipsis;
+        margin-bottom: 2px;
+      }
+
+      .clock-player-name:empty {
+        display: none;
+        margin-bottom: 0;
+      }
+
+      .clock div.active .clock-player-name {
+        color: var(--accent);
       }
 
       .clock .active {
