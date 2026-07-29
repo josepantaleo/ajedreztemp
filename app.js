@@ -861,7 +861,57 @@
         }
       }
 
-      function onPieceDragUp(e) {
+      // Determina si un movimiento de humano es una coronación de peón,
+      // es decir si hay que preguntarle qué pieza quiere antes de aplicar el move.
+      function isPromotionMove(chessInstance, from, to) {
+        const piece = chessInstance.get(from);
+        if (!piece || piece.type !== "p") return false;
+        const rank = to[1];
+        return rank === "8" || rank === "1";
+      }
+
+      // Muestra el popup de coronación y devuelve una Promise que resuelve
+      // con la letra de la pieza elegida ("q", "r", "b" o "n").
+      function askPromotion(color) {
+        return new Promise((resolve) => {
+          const overlay = document.getElementById("promo");
+          const box = document.getElementById("promo-box");
+          if (!overlay || !box) {
+            resolve("q");
+            return;
+          }
+          const options = [
+            { code: "q", label: "Dama" },
+            { code: "r", label: "Torre" },
+            { code: "b", label: "Alfil" },
+            { code: "n", label: "Caballo" },
+          ];
+          box.innerHTML = "";
+          const title = document.createElement("div");
+          title.className = "promo-title";
+          title.textContent = "Elegí la pieza para coronar";
+          box.appendChild(title);
+          options.forEach((opt) => {
+            const btn = document.createElement("button");
+            btn.type = "button";
+            btn.textContent = PIECES[color + opt.code.toUpperCase()];
+            btn.setAttribute("aria-label", opt.label);
+            btn.title = opt.label;
+            btn.addEventListener(
+              "click",
+              () => {
+                overlay.classList.remove("show");
+                resolve(opt.code);
+              },
+              { once: true }
+            );
+            box.appendChild(btn);
+          });
+          overlay.classList.add("show");
+        });
+      }
+
+      async function onPieceDragUp(e) {
         window.removeEventListener("pointermove", onPieceDragMove);
         if (!dragCtx) return;
         const ctx = dragCtx;
@@ -879,8 +929,13 @@
         document.querySelectorAll(".square.drag-origin").forEach((sq) => sq.classList.remove("drag-origin"));
 
         if (to && validMoves.includes(to)) {
+          let promotion = "q";
+          if (isPromotionMove(game, ctx.from, to)) {
+            render(); // limpia la pieza que quedó "flotando" del drag mientras se elige
+            promotion = await askPromotion(game.turn());
+          }
           const fenBeforeMove = game.fen();
-          const move = game.move({ from: ctx.from, to, promotion: "q" });
+          const move = game.move({ from: ctx.from, to, promotion });
           if (move) {
             addIncrement();
             selected = null;
@@ -905,7 +960,7 @@
         render();
       }
 
-      function clickSquare(sqName) {
+      async function clickSquare(sqName) {
         if (Date.now() < justDraggedUntil) return;
         if (!gameStarted || game.game_over() || botThinking) return;
         if (botEnabled && game.turn() === botColor) return;
@@ -927,8 +982,13 @@
         }
 
         if (selected) {
+          const from = selected;
+          let promotion = "q";
+          if (isPromotionMove(game, from, sqName)) {
+            promotion = await askPromotion(game.turn());
+          }
           const fenBeforeMove = game.fen();
-          const move = game.move({ from: selected, to: sqName, promotion: 'q' });
+          const move = game.move({ from, to: sqName, promotion });
           if (move) {
             addIncrement();
             selected = null;
@@ -3186,7 +3246,7 @@
           setTimeout(() => sqEl.classList.remove(className), 500);
         }
 
-        function onSquareClick(sqName) {
+        async function onSquareClick(sqName) {
           if (ctx.solvedOrFailed) return;
           const piece = ctx.chess.get(sqName);
           if (ctx.selected === sqName) {
@@ -3196,7 +3256,14 @@
           }
           if (ctx.selected) {
             const from = ctx.selected;
-            const attempt = { from, to: sqName, promotion: "q" };
+            let promotion = "q";
+            if (isPromotionMove(ctx.chess, from, sqName)) {
+              const color = ctx.chess.turn();
+              ctx.selected = null;
+              draw();
+              promotion = await askPromotion(color);
+            }
+            const attempt = { from, to: sqName, promotion };
             const uci = from + sqName;
             ctx.selected = null;
             attemptMove(uci, attempt);
