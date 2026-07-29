@@ -3724,7 +3724,8 @@
           return;
         }
         const admin = isCurrentUserAdmin(lastTournamentState);
-        const text = admin ? "🛠️ Modo Administrador" : "👤 Modo Jugador";
+        const referee = isCurrentUserReferee();
+        const text = referee ? "🧑‍⚖️ Modo Árbitro" : admin ? "🛠️ Modo Administrador" : "👤 Modo Jugador";
         badges.forEach((b) => {
           if (!b) return;
           b.textContent = text;
