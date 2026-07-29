@@ -4939,6 +4939,77 @@
         return y;
       }
 
+      // Arma, en texto plano, la explicación de cómo se llegó al 1°, 2° y 3°
+      // puesto a partir de la tabla ya ordenada (ranked = salida de
+      // rankPlayers_). Para cada uno de los tres primeros compara contra el
+      // jugador inmediatamente siguiente en la tabla para justificar por qué
+      // quedó por encima: diferencia de puntos, o -si empataron en puntos-
+      // diferencia de Buchholz (suma de los puntos de los rivales que
+      // enfrentó cada uno), o -si también empataron en Buchholz- el criterio
+      // final de orden alfabético que usa rankPlayers_ como último desempate.
+      function explainTopThree_(ranked) {
+        const medals = ["1° puesto", "2° puesto", "3° puesto"];
+        const lines = [];
+        const top = ranked.slice(0, 3);
+        top.forEach((p, i) => {
+          const next = ranked[i + 1];
+          let reason;
+          if (!next) {
+            reason = "Único jugador en esta posición.";
+          } else if (p.points !== next.points) {
+            reason = `Se ubica por encima de ${next.name} por haber sumado más puntos en el torneo (${p.points} vs ${next.points}).`;
+          } else if (p._buchholz !== next._buchholz) {
+            reason =
+              `Empató en puntos con ${next.name} (${p.points} c/u), pero lo superó por desempate Buchholz ` +
+              `(${p._buchholz} vs ${next._buchholz}). El Buchholz suma los puntos totales que obtuvieron los ` +
+              `rivales a los que se enfrentó cada jugador: enfrentar rivales que a su vez sumaron más puntos ` +
+              `favorece este desempate.`;
+          } else {
+            reason =
+              `Empató en puntos y en Buchholz con ${next.name} (${p.points} pts, Buchholz ${p._buchholz}). ` +
+              `Al no haber diferencia en ningún desempate calculado, el orden entre ambos se definió de forma ` +
+              `nominal (orden alfabético), por lo que en la práctica comparten esta posición.`;
+          }
+          lines.push({
+            title: `${medals[i]}: ${p.name} — ${p.points} puntos, Buchholz ${p._buchholz} (${p._record.w}V ${p._record.d}E ${p._record.l}D)`,
+            body: reason,
+          });
+        });
+        return lines;
+      }
+
+      // Dibuja en el PDF, a partir de "y", la explicación del podio generada
+      // por explainTopThree_, envolviendo el texto al ancho de la página.
+      // Devuelve el "y" libre siguiente.
+      function pdfDrawTopThreeExplanation_(doc, marginX, y, ranked) {
+        if (!ranked.length) return y;
+        y = pdfEnsureSpace_(doc, y, 18);
+        doc.setFontSize(13);
+        doc.text("Cómo se determinó el podio (1°, 2° y 3° puesto)", marginX, y);
+        y += 8;
+        const entries = explainTopThree_(ranked);
+        doc.setFontSize(10);
+        entries.forEach((entry) => {
+          y = pdfEnsureSpace_(doc, y, 18);
+          doc.setFont(undefined, "bold");
+          const titleLines = doc.splitTextToSize(entry.title, 180);
+          titleLines.forEach((tl) => {
+            y = pdfEnsureSpace_(doc, y, 18);
+            doc.text(tl, marginX, y);
+            y += 5;
+          });
+          doc.setFont(undefined, "normal");
+          const bodyLines = doc.splitTextToSize(entry.body, 180);
+          bodyLines.forEach((bl) => {
+            y = pdfEnsureSpace_(doc, y, 18);
+            doc.text(bl, marginX, y);
+            y += 5;
+          });
+          y += 3;
+        });
+        return y;
+      }
+
       // Dibuja la tabla de emparejamientos/resultados de una ronda a partir
       // de "y" y devuelve el "y" libre siguiente.
       function pdfDrawPairingsTable_(doc, marginX, y, roundPairings) {
@@ -5066,6 +5137,11 @@
         const ranked = rankPlayers_(state.players, state.pairings);
         y = pdfDrawStandingsTable_(doc, marginX, y, ranked, true);
         y += 6;
+
+        // --- Explicación de cómo se obtuvo el 1°, 2° y 3° puesto ---
+        y = pdfEnsureSpace_(doc, y + 4, 18);
+        y = pdfDrawTopThreeExplanation_(doc, marginX, y, ranked);
+        y += 4;
 
         // --- Emparejamientos y resultados, ronda por ronda ---
         const maxRound = state.pairings.reduce((m, p) => Math.max(m, p.round), 0);
