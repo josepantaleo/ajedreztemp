@@ -2297,22 +2297,74 @@
         flex-wrap: wrap;
       }
 
-      .pairing-board {
-        font-weight: 800;
-        color: var(--accent2);
-        min-width: 32px;
-      }
-
       .pairing-names {
         flex: 1;
         min-width: 160px;
         font-weight: 600;
       }
 
-      .pairing-names .vs {
+      #tournament-pairings-list {
+        display: grid;
+        grid-template-columns: repeat(auto-fill, minmax(280px, 1fr));
+        gap: 12px;
+      }
+
+      .pairing-card {
+        display: flex;
+        flex-direction: column;
+        gap: 8px;
+        padding: 14px;
+        border-radius: 14px;
+        background: rgba(128, 150, 180, 0.08);
+        border: 1px solid var(--surface2);
+      }
+
+      .pairing-card-header {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        gap: 8px;
+        flex-wrap: wrap;
+      }
+
+      .pairing-card-board {
+        font-weight: 800;
+        color: var(--accent2);
+      }
+
+      .pairing-card-names {
+        font-weight: 600;
+        line-height: 1.4;
+      }
+
+      .pairing-card-names .vs {
         color: var(--muted);
         font-weight: 400;
         margin: 0 6px;
+      }
+
+      .pairing-side-empty {
+        color: var(--muted);
+        font-style: italic;
+      }
+
+      .pairing-card-clock {
+        font-variant-numeric: tabular-nums;
+        color: var(--muted);
+        font-size: 0.9rem;
+      }
+
+      .pairing-card-detail {
+        font-size: 0.85rem;
+        color: var(--muted);
+      }
+
+      .pairing-card-actions {
+        display: flex;
+        align-items: center;
+        gap: 8px;
+        flex-wrap: wrap;
+        margin-top: 4px;
       }
 
       .pairing-result-btns {
@@ -2337,9 +2389,57 @@
         border-color: var(--accent);
       }
 
-      .pairing-bye {
+      .pairing-status {
+        display: inline-flex;
+        align-items: center;
+        gap: 4px;
+        padding: 3px 10px;
+        border-radius: 999px;
+        font-size: 0.78rem;
+        font-weight: 700;
+        white-space: nowrap;
+        background: rgba(128, 150, 180, 0.16);
+        color: var(--text);
+      }
+
+      .pairing-status-waiting {
+        background: rgba(234, 179, 8, 0.18);
+        color: #eab308;
+      }
+
+      .pairing-status-playing {
+        background: rgba(34, 197, 94, 0.18);
+        color: #22c55e;
+      }
+
+      .pairing-status-draw {
+        background: rgba(59, 130, 246, 0.18);
+        color: #3b82f6;
+      }
+
+      .pairing-status-finished {
+        background: rgba(148, 163, 184, 0.22);
+        color: var(--text);
+      }
+
+      .pairing-status-wo {
+        background: rgba(15, 23, 42, 0.3);
         color: var(--muted);
-        font-style: italic;
+      }
+
+      .pairing-status-suspended {
+        background: rgba(249, 115, 22, 0.18);
+        color: #f97316;
+      }
+
+      .pairing-status-pending {
+        background: rgba(168, 85, 247, 0.18);
+        color: #a855f7;
+      }
+
+      .pairing-status-bye {
+        background: rgba(148, 163, 184, 0.18);
+        color: var(--muted);
       }
 
       .standings-table {

@@ -5473,12 +5473,19 @@
           .sort((a, b) => a.board - b.board)
           .forEach((p) => {
             const row = document.createElement("div");
-            row.className = "pairing-row";
+            row.className = "pairing-card";
             if (p.blackId === "") {
               row.innerHTML = `
-                <div class="pairing-board">#${p.board}</div>
-                <div class="pairing-names">${p.whiteName}</div>
-                <div class="pairing-bye">Descansa esta ronda (bye, +1 punto)</div>
+                <div class="pairing-card-header">
+                  <div class="pairing-card-board">Mesa ${p.board}</div>
+                  <span class="pairing-status pairing-status-bye">⭐ Punto automático</span>
+                </div>
+                <div class="pairing-card-names">
+                  <span class="pairing-side pairing-side-white">⚪ ${p.whiteName}</span>
+                  <span class="vs">—</span>
+                  <span class="pairing-side-empty">Libre</span>
+                </div>
+                <div class="pairing-card-detail">Descansa esta ronda (bye, +1 punto)</div>
               `;
               listEl.appendChild(row);
               return;
@@ -5498,19 +5505,50 @@
                       : `⏱️ Tiempo de espera reglamentario cumplido para ${absentName}`;
                   })()
                 : "";
-            const gameStatusText = !game
-              ? ""
-              : game.status === "finished"
-              ? "Partida terminada" + (game.resultReason === "wo" || game.resultReason === "wo-auto" ? " (W.O.)" : "")
-              : game.status === "suspended"
-              ? "⏸️ Suspendida por el árbitro"
-              : woEtaText
-              ? woEtaText
-              : game.lastMoveSan
-              ? "En juego · última jugada: " + game.lastMoveSan
-              : game.clock && !bothJoined
-              ? "⏳ Esperando jugadores"
-              : "Sin empezar";
+            // Detalle extra debajo del badge de estado: solo lo que no está
+            // ya dicho por el badge (última jugada, cuenta regresiva de WO).
+            // Evita repetir "Finalizada" / "Esperando jugadores" dos veces.
+            const gameStatusText =
+              game && game.status !== "finished" && game.status !== "suspended" && woEtaText
+                ? woEtaText
+                : game && game.status !== "finished" && game.status !== "suspended" && game.lastMoveSan
+                ? "Última jugada: " + game.lastMoveSan
+                : "";
+            // Estado de la mesa: una etiqueta corta y clara, para poder
+            // barrer la lista de un vistazo sin leer cada fila entera.
+            // Cuando hay resultado cargado pero la ronda todavía está
+            // "pending_approval" (y no está cerrada), lo marcamos como
+            // pendiente de confirmar en vez de finalizado directamente.
+            let statusCls, statusText;
+            if (p.result) {
+              if (state.meta.roundStatus === "pending_approval" && !p.locked) {
+                statusCls = "pending";
+                statusText = "🟣 Resultado pendiente de confirmar";
+              } else if (p.result === "wo-black" || p.result === "wo-white") {
+                statusCls = "wo";
+                statusText = "⚫ Incomparecencia";
+              } else if (p.result === "1/2-1/2") {
+                statusCls = "draw";
+                statusText = "🔵 Tablas acordadas";
+              } else {
+                statusCls = "finished";
+                statusText = "⚪ Finalizada";
+              }
+              if (p.locked) statusText += " 🔒";
+            } else if (game && game.status === "suspended") {
+              statusCls = "suspended";
+              statusText = "⏸️ Suspendida";
+            } else if (game && game.clock && !bothJoined) {
+              statusCls = "waiting";
+              statusText = "🟡 Esperando jugadores";
+            } else {
+              statusCls = "playing";
+              statusText = "🟢 En juego";
+            }
+            const clockHtml =
+              game && game.clock
+                ? `<div class="pairing-card-clock">⏱️ ${formatTime(game.clock.w)} — ${formatTime(game.clock.b)}</div>`
+                : "";
             const isMyGame =
               (p.whiteEmail && p.whiteEmail.toLowerCase() === myEmail) || (p.blackEmail && p.blackEmail.toLowerCase() === myEmail);
             const canPlay = isAdmin || isMyGame;
@@ -5553,13 +5591,22 @@
                   }">${game.status === "suspended" ? "▶️ Reanudar" : "⏸️ Suspender"}</button>`
                 : "";
             row.innerHTML = `
-              <div class="pairing-board">#${p.board}</div>
-              <div class="pairing-names">${p.whiteName}<span class="vs">vs</span>${p.blackName}
-                <div class="mini-diagram-caption" style="margin:2px 0 0;text-align:left">${gameStatusText}</div>
+              <div class="pairing-card-header">
+                <div class="pairing-card-board">Mesa ${p.board}</div>
+                <span class="pairing-status pairing-status-${statusCls}">${statusText}</span>
               </div>
-              ${playBtnHtml}
-              ${suspendBtnHtml}
-              <div class="pairing-result-btns">${btnsHtml}</div>
+              <div class="pairing-card-names">
+                <span class="pairing-side pairing-side-white">⚪ ${p.whiteName}</span>
+                <span class="vs">vs</span>
+                <span class="pairing-side pairing-side-black">${p.blackName} ⚫</span>
+              </div>
+              ${clockHtml}
+              ${gameStatusText ? `<div class="pairing-card-detail">${gameStatusText}</div>` : ""}
+              <div class="pairing-card-actions">
+                ${playBtnHtml}
+                ${suspendBtnHtml}
+                <div class="pairing-result-btns">${btnsHtml}</div>
+              </div>
             `;
             listEl.appendChild(row);
           });
