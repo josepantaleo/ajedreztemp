@@ -5298,7 +5298,7 @@
             } — ${state.players.length} jugadores`
           : `Ronda ${state.meta.round}${roundsNote} — ${state.players.length} jugadores`;
 
-        document.getElementById("tournament-admin-controls").style.display = isAdmin ? "flex" : "none";
+        document.getElementById("tournament-admin-panel").style.display = isAdmin ? "" : "none";
         document.getElementById("tournament-next-round-btn").style.display = !isFinished && state.meta.round === 0 ? "" : "none";
         document.getElementById("tournament-finish-btn").style.display = isFinished ? "none" : "";
         document.getElementById("tournament-reopen-btn").style.display = isFinished ? "" : "none";
@@ -5506,6 +5506,8 @@
         // posiciones: recalcular, imprimir e exportar a PDF (ver
         // fbRecalculatePositions, printCurrentRoundPairings y
         // exportStandingsPDF más arriba).
+        const refereePanelEl = document.getElementById("tournament-referee-panel");
+        if (refereePanelEl) refereePanelEl.style.display = isReferee ? "" : "none";
         const refereeToolsEl = document.getElementById("tournament-referee-tools");
         if (refereeToolsEl) refereeToolsEl.style.display = isReferee ? "flex" : "none";
 

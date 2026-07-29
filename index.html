@@ -2025,17 +2025,24 @@
                   </div>
                   <div style="display: flex; gap: 8px; flex-wrap: wrap">
                     <button class="btn" id="tournament-refresh-btn">🔄 Actualizar</button>
-                    <div id="tournament-admin-controls" style="display: none; gap: 8px; flex-wrap: wrap">
-                      <button class="btn" id="tournament-next-round-btn">➡️ Generar próxima ronda</button>
-                      <button class="btn" id="tournament-finish-btn">🏁 Finalizar torneo</button>
-                      <button class="btn" id="tournament-reopen-btn" style="display: none">↩️ Reabrir torneo</button>
-                      <button class="btn" id="tournament-settings-btn">⚙️ Configuración</button>
-                      <button class="btn" id="tournament-export-full-pdf-btn">📄 Imprimir resultados del torneo (PDF)</button>
-                      <button class="btn" id="tournament-reset-btn">🗑️ Reiniciar torneo</button>
-                    </div>
                   </div>
                 </div>
                 <p class="muted" id="tournament-round-display"></p>
+              </div>
+
+              <div class="card" id="tournament-admin-panel" style="display: none; border: 2px solid var(--surface2)">
+                <h3 style="margin: 0 0 10px">🛠️ Panel de administrador</h3>
+                <p class="muted" style="font-size: 12px; margin: 0 0 10px">
+                  Acciones exclusivas de la cuenta administradora del torneo (<strong>ipem146centenario@gmail.com</strong>).
+                </p>
+                <div id="tournament-admin-controls" style="display: flex; gap: 8px; flex-wrap: wrap">
+                  <button class="btn" id="tournament-next-round-btn">➡️ Generar próxima ronda</button>
+                  <button class="btn" id="tournament-finish-btn">🏁 Finalizar torneo</button>
+                  <button class="btn" id="tournament-reopen-btn" style="display: none">↩️ Reabrir torneo</button>
+                  <button class="btn" id="tournament-settings-btn">⚙️ Configuración</button>
+                  <button class="btn" id="tournament-export-full-pdf-btn">📄 Imprimir resultados del torneo (PDF)</button>
+                  <button class="btn" id="tournament-reset-btn">🗑️ Reiniciar torneo</button>
+                </div>
               </div>
 
               <div class="card" id="tournament-settings-panel" style="display: none">
@@ -2239,6 +2246,7 @@
                 <h3 style="margin: 0 0 6px">⏳ Ronda pendiente de aprobación</h3>
                 <p id="tournament-approval-status" style="margin: 0 0 10px"></p>
                 <div id="tournament-approval-admin-controls" style="display: none">
+                  <p class="muted" style="font-size: 12px; margin: 0 0 6px; font-weight: 600">🛠️ Acciones del administrador</p>
                   <button class="btn primary" id="tournament-approve-round-btn">
                     ✅ Aprobar ronda y generar la siguiente
                   </button>
@@ -2251,8 +2259,8 @@
                 </div>
 
                 <div id="tournament-referee-round-controls" style="display: none; margin-top: 12px">
-                  <p class="muted" style="font-size: 12px; margin: 0 0 8px">
-                    🧑‍⚖️ Modo árbitro: podés cerrar la ronda por separado (bloquea los resultados para todos menos vos) y
+                  <p class="muted" style="font-size: 12px; margin: 0 0 8px; font-weight: 600">
+                    🧑‍⚖️ Acciones del árbitro — podés cerrar la ronda por separado (bloquea los resultados para todos menos vos) y
                     generar la ronda siguiente en otro momento.
                   </p>
                   <div id="tournament-manual-bye-box" style="display: none; margin: 10px 0; text-align: left">
@@ -2278,6 +2286,19 @@
                 </div>
               </div>
 
+              <div class="card" id="tournament-referee-panel" style="display: none; border: 2px solid var(--surface2)">
+                <h3 style="margin: 0 0 10px">🧑‍⚖️ Panel de árbitro</h3>
+                <p class="muted" style="font-size: 12px; margin: 0 0 10px">
+                  Acciones exclusivas de la cuenta árbitro del torneo. Los controles para cerrar/generar ronda con BYE manual
+                  aparecen más abajo cuando la ronda está lista para eso.
+                </p>
+                <div id="tournament-referee-tools" style="display: none; gap: 8px; flex-wrap: wrap">
+                  <button class="btn" id="tournament-recalc-positions-btn">🔄 Recalcular posiciones</button>
+                  <button class="btn" id="tournament-print-pairings-btn">🖨️ Imprimir emparejamientos</button>
+                  <button class="btn" id="tournament-export-standings-pdf-btn">📄 Exportar posiciones a PDF</button>
+                </div>
+              </div>
+
               <div class="card" id="tournament-pairings-card">
                 <h3>Emparejamientos — ronda actual</h3>
                 <div id="tournament-pairings-list"></div>
@@ -2285,11 +2306,6 @@
 
               <div class="card" id="tournament-standings-card">
                 <h3>Tabla de posiciones</h3>
-                <div id="tournament-referee-tools" style="display: none; gap: 8px; flex-wrap: wrap; margin-bottom: 12px">
-                  <button class="btn" id="tournament-recalc-positions-btn">🔄 Recalcular posiciones</button>
-                  <button class="btn" id="tournament-print-pairings-btn">🖨️ Imprimir emparejamientos</button>
-                  <button class="btn" id="tournament-export-standings-pdf-btn">📄 Exportar posiciones a PDF</button>
-                </div>
                 <div id="tournament-standings-list"></div>
               </div>
 
