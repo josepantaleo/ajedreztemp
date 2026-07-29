@@ -1424,6 +1424,7 @@
         });
         if (name === "jugar") render();
         if (name === "torneo" && typeof refreshTournament === "function") refreshTournament();
+        if (name === "pantalla-publica" && typeof renderPublicScreen === "function") renderPublicScreen(lastTournamentState);
       }
 
       document.querySelectorAll("[data-page]").forEach((button) => {
@@ -3817,6 +3818,7 @@
             const state = normalizeTournamentState(snap.exists ? snap.data() : null);
             lastTournamentState = state;
             renderTournamentState(state);
+            if (typeof renderPublicScreen === "function") renderPublicScreen(state);
             handleLiveMatchUpdate(state);
           },
           (err) => {
@@ -5702,6 +5704,169 @@
         if (refereeToolsEl) refereeToolsEl.style.display = isReferee ? "flex" : "none";
 
         renderPlayersPanel(state, isAdmin);
+      }
+
+      // =========================
+      // PANTALLA PÚBLICA DEL TORNEO
+      // Vista de solo lectura pensada para proyectarse en un TV/proyector
+      // en el salón: nombre del torneo, ronda actual, clasificación en
+      // vivo, mesas activas, resultados recientes y próxima ronda. No
+      // requiere iniciar sesión (usa el mismo estado en tiempo real que ya
+      // llega por subscribeTournament) y no muestra ningún control de
+      // administración.
+      // =========================
+      function escapePublicScreenHtml_(text) {
+        return String(text == null ? "" : text).replace(/[&<>"']/g, (ch) => {
+          return { "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[ch];
+        });
+      }
+
+      function resultLabelForPairing_(pairing) {
+        if (!pairing.result) return "";
+        if (pairing.blackId === "") return "BYE";
+        switch (pairing.result) {
+          case "1-0":
+            return "1 - 0";
+          case "0-1":
+            return "0 - 1";
+          case "1/2-1/2":
+            return "½ - ½";
+          case "wo-black":
+            return "1 - 0 (WO)";
+          case "wo-white":
+            return "0 - 1 (WO)";
+          default:
+            return pairing.result;
+        }
+      }
+
+      function renderPublicScreen(state) {
+        const emptyEl = document.getElementById("public-screen-empty");
+        const contentEl = document.getElementById("public-screen-content");
+        if (!emptyEl || !contentEl) return;
+
+        const hasTournament = !!(state && (state.meta.status === "active" || state.meta.status === "finished"));
+        emptyEl.style.display = hasTournament ? "none" : "";
+        contentEl.style.display = hasTournament ? "" : "none";
+        if (!hasTournament) return;
+
+        const isFinished = state.meta.status === "finished";
+        const roundsNote = state.meta.totalRounds ? ` de ${state.meta.totalRounds}` : "";
+
+        document.getElementById("public-screen-name").textContent = state.meta.name || "Torneo";
+        document.getElementById("public-screen-round").textContent = isFinished
+          ? `🏁 Torneo finalizado — Ronda ${state.meta.round}${roundsNote}`
+          : `Ronda ${state.meta.round}${roundsNote}`;
+
+        // Clasificación en vivo (misma lógica de puntos/Buchholz que el
+        // resto de la app: ver rankPlayers_).
+        const ranked = rankPlayers_(state.players, state.pairings);
+        const standingsEl = document.getElementById("public-screen-standings");
+        if (!ranked.length) {
+          standingsEl.innerHTML = '<p class="public-screen-empty-note">Todavía no hay jugadores.</p>';
+        } else {
+          const rows = ranked
+            .map((p, i) => {
+              const rec = p._record || { w: 0, d: 0, l: 0 };
+              return `
+                <tr>
+                  <td class="public-screen-rank">${i + 1}</td>
+                  <td>${escapePublicScreenHtml_(p.name)}</td>
+                  <td>${p.points}</td>
+                  <td>${p._buchholz}</td>
+                  <td>${rec.w}/${rec.d}/${rec.l}</td>
+                </tr>`;
+            })
+            .join("");
+          standingsEl.innerHTML = `
+            <table class="public-screen-table">
+              <thead>
+                <tr><th>#</th><th>Jugador</th><th>Pts</th><th>BH</th><th>V/E/D</th></tr>
+              </thead>
+              <tbody>${rows}</tbody>
+            </table>`;
+        }
+
+        // Mesas activas: emparejamientos de la ronda actual que todavía no
+        // tienen resultado cargado (no incluye byes, que quedan resueltos
+        // apenas se genera la ronda).
+        const currentRoundPairings = state.pairings.filter((p) => p.round === state.meta.round);
+        const activePairings = currentRoundPairings.filter((p) => p.blackId !== "" && !p.result).sort((a, b) => a.board - b.board);
+        const activeEl = document.getElementById("public-screen-active-tables");
+        if (!activePairings.length) {
+          activeEl.innerHTML = '<p class="public-screen-empty-note">No hay mesas en juego en este momento.</p>';
+        } else {
+          activeEl.innerHTML = activePairings
+            .map(
+              (p) => `
+                <div class="public-screen-active-row">
+                  <span class="public-screen-board-badge">Mesa ${p.board}</span>
+                  <span class="public-screen-vs">${escapePublicScreenHtml_(p.whiteName)} vs ${escapePublicScreenHtml_(p.blackName)}</span>
+                </div>`
+            )
+            .join("");
+        }
+
+        // Resultados recientes: partidas con resultado cargado, empezando
+        // por la ronda actual y, si faltan para completar la lista, las de
+        // la ronda anterior.
+        const recentEl = document.getElementById("public-screen-recent-results");
+        const finishedCurrent = currentRoundPairings.filter((p) => p.result).sort((a, b) => a.board - b.board);
+        let recentResults = finishedCurrent.slice();
+        if (recentResults.length < 8 && state.meta.round > 1) {
+          const prevRoundFinished = state.pairings
+            .filter((p) => p.round === state.meta.round - 1 && p.result)
+            .sort((a, b) => a.board - b.board);
+          recentResults = recentResults.concat(prevRoundFinished);
+        }
+        recentResults = recentResults.slice(0, 12);
+        if (!recentResults.length) {
+          recentEl.innerHTML = '<p class="public-screen-empty-note">Todavía no hay resultados cargados.</p>';
+        } else {
+          recentEl.innerHTML = recentResults
+            .map((p) => {
+              const opponent = p.blackId === "" ? "— (BYE)" : escapePublicScreenHtml_(p.blackName);
+              return `
+                <div class="public-screen-result-row">
+                  <span class="public-screen-board-badge">R${p.round}·M${p.board}</span>
+                  <span class="public-screen-vs">${escapePublicScreenHtml_(p.whiteName)} vs ${opponent}</span>
+                  <span class="public-screen-result-badge">${resultLabelForPairing_(p)}</span>
+                </div>`;
+            })
+            .join("");
+        }
+
+        // Próxima ronda / estado general del torneo.
+        const nextRoundEl = document.getElementById("public-screen-next-round");
+        if (isFinished) {
+          const topScore = ranked.length ? ranked[0].points : 0;
+          const topTB = ranked.length ? ranked[0]._buchholz : 0;
+          const champions = ranked.filter((p) => p.points === topScore && p._buchholz === topTB);
+          nextRoundEl.textContent =
+            champions.length > 1
+              ? "🏆 Empate en el primer puesto: " + champions.map((p) => p.name).join(", ")
+              : "🏆 Campeón: " + (champions[0] ? champions[0].name : "—");
+        } else if (state.meta.roundStatus === "pending_approval") {
+          nextRoundEl.textContent = `Ronda ${state.meta.round} terminada — esperando aprobación para pasar a la ronda ${state.meta.round + 1}`;
+        } else if (state.meta.roundStatus === "closed") {
+          nextRoundEl.textContent = `Ronda ${state.meta.round} cerrada — generando la ronda ${state.meta.round + 1}`;
+        } else if (state.meta.totalRounds && state.meta.round >= state.meta.totalRounds) {
+          nextRoundEl.textContent = "Última ronda en curso";
+        } else {
+          nextRoundEl.textContent = `Próxima ronda: ${state.meta.round + 1}${roundsNote}`;
+        }
+      }
+
+      const publicScreenFullscreenBtn = document.getElementById("public-screen-fullscreen-btn");
+      if (publicScreenFullscreenBtn) {
+        publicScreenFullscreenBtn.addEventListener("click", () => {
+          const el = document.getElementById("public-screen");
+          if (document.fullscreenElement) {
+            document.exitFullscreen();
+          } else if (el && el.requestFullscreen) {
+            el.requestFullscreen();
+          }
+        });
       }
 
       // Panel de administración de jugadores: alta, edición (nombre/email) y

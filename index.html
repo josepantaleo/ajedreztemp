@@ -30,6 +30,7 @@
           <button data-page="aprender">📚 Aprender</button>
           <button data-page="ejercicios">🧩 Ejercicios</button>
           <button data-page="torneo">🏆 Torneo</button>
+          <button data-page="pantalla-publica">📺 Pantalla pública</button>
           <button data-page="estadisticas">📊 Estadísticas</button>
           <button data-page="temas">🎨 Temas</button>
           <button data-page="configuracion">⚙️ Configuración</button>
@@ -2350,6 +2351,44 @@
                   torneo.
                 </p>
               </div>
+            </div>
+          </div>
+        </section>
+
+        <section class="page" id="page-pantalla-publica">
+          <div id="public-screen" class="public-screen">
+            <button class="btn public-screen-fullscreen-btn" id="public-screen-fullscreen-btn">⛶ Pantalla completa</button>
+
+            <div id="public-screen-empty" class="public-screen-empty" style="display: none">
+              <p>No hay un torneo en curso todavía.</p>
+            </div>
+
+            <div id="public-screen-content" style="display: none">
+              <header class="public-screen-header">
+                <h1 id="public-screen-name">Torneo</h1>
+                <p id="public-screen-round" class="public-screen-round"></p>
+              </header>
+
+              <div class="public-screen-grid">
+                <section class="public-screen-card">
+                  <h2>📊 Clasificación</h2>
+                  <div id="public-screen-standings"></div>
+                </section>
+
+                <section class="public-screen-card">
+                  <h2>♟️ Mesas activas</h2>
+                  <div id="public-screen-active-tables"></div>
+                </section>
+
+                <section class="public-screen-card">
+                  <h2>✅ Resultados recientes</h2>
+                  <div id="public-screen-recent-results"></div>
+                </section>
+              </div>
+
+              <footer class="public-screen-footer">
+                <p id="public-screen-next-round"></p>
+              </footer>
             </div>
           </div>
         </section>
