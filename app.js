@@ -3560,6 +3560,7 @@
       let tournamentUnsub = null;
       let tournamentBusy = false;
       let lastTournamentState = null;
+      let tournamentEditingPlayerId = null; // id del jugador cuya fila está en modo edición en el panel de árbitro
       let currentUser = null; // { email, displayName } una vez logueado con Google
 
       // Única cuenta habilitada para administrar el torneo. Se ignora
@@ -3779,6 +3780,11 @@
             played: [],
             byes: 0,
             colorBalance: 0, // >0 jugó más veces con blancas, <0 más veces con negras
+            // Estado del jugador dentro del torneo. Por ahora solo "active"
+            // se usa para emparejar (ver buildNextRoundPairings_); "withdrawn"
+            // (retirado) y "disqualified" (descalificado) quedan reservados
+            // para las acciones de árbitro que se agregan más adelante.
+            status: "active",
           }));
         const rounds = Number(totalRounds);
         const tc = timeControl || { minutes: 0, increment: 0 };
@@ -3803,6 +3809,114 @@
         return getTournamentStateOnce();
       }
 
+      // ===== Alta / edición / baja de jugadores (panel de árbitro) =====
+
+      function validatePlayerNameEmail_(name, email) {
+        name = (name || "").trim();
+        email = (email || "").trim().toLowerCase();
+        if (!name) throw new Error("El nombre no puede estar vacío");
+        if (email && !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) {
+          throw new Error(`El email "${email}" no parece válido`);
+        }
+        return { name, email };
+      }
+
+      // Agrega un jugador nuevo al torneo ya creado. Arranca en 0 puntos y sin
+      // partidas jugadas, así que buildNextRoundPairings_ lo toma solo en la
+      // próxima ronda que se genere (no hace falta tocar la ronda actual).
+      async function fbAddPlayer(rawName, rawEmail) {
+        assertAdmin();
+        const { name, email } = validatePlayerNameEmail_(rawName, rawEmail);
+        await fbDb.runTransaction(async (tx) => {
+          const snap = await tx.get(fbRoomRef);
+          if (!snap.exists) throw new Error("Todavía no creaste un torneo");
+          const data = snap.data();
+          const players = data.players || [];
+          if (email && players.some((p) => (p.email || "").toLowerCase() === email)) {
+            throw new Error(`Ya hay un jugador con el email ${email}`);
+          }
+          let n = players.length + 1;
+          const usedIds = new Set(players.map((p) => p.id));
+          while (usedIds.has("p" + n)) n++;
+          const newPlayer = {
+            id: "p" + n,
+            name,
+            email,
+            points: 0,
+            played: [],
+            byes: 0,
+            colorBalance: 0,
+            status: "active",
+          };
+          tx.update(fbRoomRef, { players: players.concat([newPlayer]) });
+        });
+        return getTournamentStateOnce();
+      }
+
+      // Edita solo los datos personales (nombre/email) de un jugador. No toca
+      // puntos, partidas jugadas ("played"), byes ni colorBalance, para no
+      // afectar su historial de partidas. También actualiza el nombre/email
+      // "congelados" dentro de los emparejamientos ya publicados (para que
+      // las rondas ya jugadas se vean con el dato corregido).
+      async function fbEditPlayer(playerId, rawName, rawEmail) {
+        assertAdmin();
+        const { name, email } = validatePlayerNameEmail_(rawName, rawEmail);
+        await fbDb.runTransaction(async (tx) => {
+          const snap = await tx.get(fbRoomRef);
+          if (!snap.exists) throw new Error("Todavía no creaste un torneo");
+          const data = snap.data();
+          const players = data.players || [];
+          const idx = players.findIndex((p) => p.id === playerId);
+          if (idx === -1) throw new Error("No se encontró ese jugador");
+          if (email && players.some((p, i) => i !== idx && (p.email || "").toLowerCase() === email)) {
+            throw new Error(`Ya hay otro jugador con el email ${email}`);
+          }
+          const updatedPlayers = players.slice();
+          updatedPlayers[idx] = { ...updatedPlayers[idx], name, email };
+          const pairings = (data.pairings || []).map((pr) => {
+            const copy = { ...pr };
+            if (copy.whiteId === playerId) {
+              copy.whiteName = name;
+              copy.whiteEmail = email;
+            }
+            if (copy.blackId === playerId) {
+              copy.blackName = name;
+              copy.blackEmail = email;
+            }
+            return copy;
+          });
+          tx.update(fbRoomRef, { players: updatedPlayers, pairings });
+        });
+        return getTournamentStateOnce();
+      }
+
+      // Elimina por completo a un jugador del torneo. Solo se permite si
+      // todavía no jugó ninguna partida (ni siquiera un bye): si ya tiene
+      // historial, borrarlo del arreglo dejaría emparejamientos/partidas
+      // "huérfanos" apuntando a un id inexistente. Para sacar del torneo a
+      // alguien que ya jugó, corresponde "Retirar jugador" (no elimina el
+      // historial, solo evita que lo vuelvan a emparejar) en vez de esto.
+      async function fbDeletePlayer(playerId) {
+        assertAdmin();
+        await fbDb.runTransaction(async (tx) => {
+          const snap = await tx.get(fbRoomRef);
+          if (!snap.exists) throw new Error("Todavía no creaste un torneo");
+          const data = snap.data();
+          const players = data.players || [];
+          const player = players.find((p) => p.id === playerId);
+          if (!player) throw new Error("No se encontró ese jugador");
+          const pairings = data.pairings || [];
+          const hasHistory = pairings.some((pr) => pr.whiteId === playerId || pr.blackId === playerId);
+          if (hasHistory) {
+            throw new Error(
+              "Este jugador ya tiene partidas emparejadas: para sacarlo sin perder el historial usá 'Retirar jugador' en vez de eliminarlo."
+            );
+          }
+          tx.update(fbRoomRef, { players: players.filter((p) => p.id !== playerId) });
+        });
+        return getTournamentStateOnce();
+      }
+
       // Empareja jugadores estilo suizo: ordena por puntaje y, en caso de
       // empate, por desempate Buchholz (suma de puntos de los rivales ya
       // jugados) reusando rankPlayers_ — y como último criterio, el nombre.
@@ -3816,7 +3930,12 @@
       function buildNextRoundPairings_(players, currentRound, timeControl, pairingsForTiebreak) {
         const nextRound = currentRound + 1;
 
-        let pool = pairingsForTiebreak ? rankPlayers_(players, pairingsForTiebreak) : players.slice();
+        // Jugadores retirados o descalificados no vuelven a ser emparejados,
+        // pero se mantienen en el arreglo general (con su historial intacto)
+        // para que la tabla de posiciones los siga mostrando.
+        const activePlayers = players.filter((p) => (p.status || "active") === "active");
+
+        let pool = pairingsForTiebreak ? rankPlayers_(activePlayers, pairingsForTiebreak) : activePlayers.slice();
         pool = pool.slice().sort((a, b) => {
           if (b.points !== a.points) return b.points - a.points;
           if (pairingsForTiebreak && (b._buchholz || 0) !== (a._buchholz || 0)) return (b._buchholz || 0) - (a._buchholz || 0);
@@ -4254,6 +4373,12 @@
         return getTournamentStateOnce();
       }
 
+      function playerStatusLabel_(status) {
+        if (status === "withdrawn") return "🚪 Retirado";
+        if (status === "disqualified") return "⛔ Descalificado";
+        return "✅ Activo";
+      }
+
       function resultLabel(result) {
         if (result === "1-0") return "1 - 0";
         if (result === "0-1") return "0 - 1";
@@ -4541,18 +4666,103 @@
               <td>${p._buchholz}</td>
               <td>${p._record.w}-${p._record.d}-${p._record.l}</td>
               <td>${p.played.length}</td>
+              <td>${playerStatusLabel_(p.status)}</td>
             </tr>`
           )
           .join("");
         standingsEl.innerHTML = `
           <table class="standings-table">
-            <thead><tr><th>#</th><th>Jugador</th><th>Puntos</th><th>Buchholz</th><th>V-E-D</th><th>Partidas</th></tr></thead>
+            <thead><tr><th>#</th><th>Jugador</th><th>Puntos</th><th>Buchholz</th><th>V-E-D</th><th>Partidas</th><th>Estado</th></tr></thead>
             <tbody>${rows}</tbody>
           </table>
           <p class="muted" style="font-size: 12px; margin-top: 8px">
             Buchholz = suma de puntos de los rivales que enfrentó cada jugador (desempate). V-E-D = victorias-empates-derrotas (el bye cuenta como victoria).
           </p>
         `;
+
+        renderPlayersPanel(state, isAdmin);
+      }
+
+      // Panel de administración de jugadores: alta, edición (nombre/email) y
+      // baja. Solo visible para el administrador. La edición se hace inline
+      // (la fila se convierte en un mini-formulario) para no depender de
+      // ningún modal nuevo.
+      function renderPlayersPanel(state, isAdmin) {
+        const card = document.getElementById("tournament-players-card");
+        if (!card) return;
+        if (!isAdmin) {
+          card.style.display = "none";
+          return;
+        }
+        card.style.display = "";
+        const listEl = document.getElementById("tournament-players-list");
+
+        if (tournamentEditingPlayerId && !state.players.some((p) => p.id === tournamentEditingPlayerId)) {
+          tournamentEditingPlayerId = null;
+        }
+
+        listEl.innerHTML = state.players
+          .map((p) => {
+            if (p.id === tournamentEditingPlayerId) {
+              return `
+                <div class="pairing-row" data-player-row="${p.id}">
+                  <input type="text" class="player-edit-name" value="${p.name.replace(/"/g, "&quot;")}" style="flex:1; min-width:120px; padding:6px 8px; border-radius:8px; border:1px solid var(--surface2); background:var(--surface); color:var(--text)" />
+                  <input type="email" class="player-edit-email" value="${(p.email || "").replace(/"/g, "&quot;")}" placeholder="Email" style="flex:1; min-width:160px; padding:6px 8px; border-radius:8px; border:1px solid var(--surface2); background:var(--surface); color:var(--text)" />
+                  <button class="btn primary" data-save-player="${p.id}">Guardar</button>
+                  <button class="btn" data-cancel-edit-player="1">Cancelar</button>
+                </div>`;
+            }
+            return `
+              <div class="pairing-row" data-player-row="${p.id}">
+                <div class="pairing-names">${p.name}${p.email ? ` <span class="muted" style="font-size:12px">(${p.email})</span>` : ""}
+                  <div class="mini-diagram-caption" style="margin:2px 0 0;text-align:left">${playerStatusLabel_(p.status)} · ${p.points} pts</div>
+                </div>
+                <button class="btn" data-edit-player="${p.id}">✏️ Editar</button>
+                <button class="btn danger" data-delete-player="${p.id}">🗑️ Eliminar</button>
+              </div>`;
+          })
+          .join("");
+
+        listEl.querySelectorAll("button[data-edit-player]").forEach((btn) => {
+          btn.addEventListener("click", () => {
+            tournamentEditingPlayerId = btn.dataset.editPlayer;
+            renderPlayersPanel(lastTournamentState, true);
+          });
+        });
+        listEl.querySelectorAll("button[data-cancel-edit-player]").forEach((btn) => {
+          btn.addEventListener("click", () => {
+            tournamentEditingPlayerId = null;
+            renderPlayersPanel(lastTournamentState, true);
+          });
+        });
+        listEl.querySelectorAll("button[data-save-player]").forEach((btn) => {
+          btn.addEventListener("click", async () => {
+            const playerId = btn.dataset.savePlayer;
+            const row = listEl.querySelector(`[data-player-row="${playerId}"]`);
+            const name = row.querySelector(".player-edit-name").value;
+            const email = row.querySelector(".player-edit-email").value;
+            try {
+              await fbEditPlayer(playerId, name, email);
+              tournamentEditingPlayerId = null;
+              toast("✓ Jugador actualizado");
+            } catch (err) {
+              toast("❌ " + err.message);
+            }
+          });
+        });
+        listEl.querySelectorAll("button[data-delete-player]").forEach((btn) => {
+          btn.addEventListener("click", async () => {
+            const playerId = btn.dataset.deletePlayer;
+            const player = state.players.find((p) => p.id === playerId);
+            if (!confirm(`¿Eliminar a ${player ? player.name : "este jugador"}? Se recalculará el torneo.`)) return;
+            try {
+              await fbDeletePlayer(playerId);
+              toast("✓ Jugador eliminado");
+            } catch (err) {
+              toast("❌ " + err.message);
+            }
+          });
+        });
       }
 
       async function refreshTournament() {
@@ -5150,6 +5360,19 @@
         if (!confirm("¿Seguro que querés borrar todo el torneo actual? No se puede deshacer.")) return;
         try {
           await fbResetAll();
+        } catch (err) {
+          toast("❌ " + err.message);
+        }
+      });
+
+      document.getElementById("tournament-add-player-btn").addEventListener("click", async () => {
+        const nameInput = document.getElementById("tournament-add-player-name");
+        const emailInput = document.getElementById("tournament-add-player-email");
+        try {
+          await fbAddPlayer(nameInput.value, emailInput.value);
+          nameInput.value = "";
+          emailInput.value = "";
+          toast("✓ Jugador agregado");
         } catch (err) {
           toast("❌ " + err.message);
         }

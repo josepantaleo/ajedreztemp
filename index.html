@@ -2205,6 +2205,47 @@
                 <h3>Tabla de posiciones</h3>
                 <div id="tournament-standings-list"></div>
               </div>
+
+              <div class="card" id="tournament-players-card" style="display: none">
+                <h3>👥 Jugadores (panel de árbitro)</h3>
+                <div id="tournament-players-list"></div>
+                <div style="display: flex; gap: 8px; flex-wrap: wrap; margin-top: 12px">
+                  <input
+                    type="text"
+                    id="tournament-add-player-name"
+                    placeholder="Nombre"
+                    style="
+                      flex: 1;
+                      min-width: 140px;
+                      padding: 8px 10px;
+                      border-radius: 8px;
+                      border: 1px solid var(--surface2);
+                      background: var(--surface);
+                      color: var(--text);
+                    "
+                  />
+                  <input
+                    type="email"
+                    id="tournament-add-player-email"
+                    placeholder="Email (opcional)"
+                    style="
+                      flex: 1;
+                      min-width: 180px;
+                      padding: 8px 10px;
+                      border-radius: 8px;
+                      border: 1px solid var(--surface2);
+                      background: var(--surface);
+                      color: var(--text);
+                    "
+                  />
+                  <button class="btn primary" id="tournament-add-player-btn">➕ Agregar jugador</button>
+                </div>
+                <p class="muted" style="font-size: 12px; margin-top: 8px">
+                  Un jugador agregado ya iniciado el torneo entra con 0 puntos y queda disponible recién para la próxima ronda que se
+                  genere. "Eliminar" solo funciona si todavía no jugó ninguna partida; si ya jugó, hay que retirarlo (próximamente) para
+                  no perder su historial.
+                </p>
+              </div>
             </div>
           </div>
         </section>
