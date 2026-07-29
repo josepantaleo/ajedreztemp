@@ -790,6 +790,10 @@
             toast("⏳ Esperando a que el rival entre a la partida.");
             return;
           }
+          if (tournamentMatchActive && tournamentCurrentGameRow && tournamentCurrentGameRow.status === "suspended") {
+            toast("⏸️ El árbitro suspendió esta partida.");
+            return;
+          }
           const piece = game.get(sqName);
           if (!piece || piece.color !== game.turn()) return;
 
@@ -908,6 +912,10 @@
         if (tournamentMatchActive && game.turn() !== tournamentMyColor()) return;
         if (tournamentMatchActive && tournamentClockWaitingForBothPlayers()) {
           toast("⏳ Esperando a que el rival entre a la partida.");
+          return;
+        }
+        if (tournamentMatchActive && tournamentCurrentGameRow && tournamentCurrentGameRow.status === "suspended") {
+          toast("⏸️ El árbitro suspendió esta partida.");
           return;
         }
 
@@ -3572,6 +3580,24 @@
       const TOURNAMENT_ADMIN_EMAIL = "ipem146centenario@gmail.com";
       let authListenerAttached = false;
 
+      // Modo árbitro: una cuenta aparte del admin del torneo, exclusiva para
+      // las acciones "de reglamento" (retirar/reincorporar/descalificar
+      // jugadores, declarar W.O., cerrar rondas y corregir resultados ya
+      // cerrados). Es intencionalmente una cuenta distinta de
+      // TOURNAMENT_ADMIN_EMAIL: ni el admin del torneo ni ninguna otra
+      // cuenta puede hacer estas acciones, solo esta.
+      const TOURNAMENT_REFEREE_EMAIL = "josepantaleo@gmail.com";
+
+      function isCurrentUserReferee() {
+        return !!currentUser && currentUser.email === TOURNAMENT_REFEREE_EMAIL;
+      }
+
+      function assertReferee() {
+        if (!isCurrentUserReferee()) {
+          throw new Error("Esta acción es exclusiva del árbitro del torneo");
+        }
+      }
+
       function getFirebaseConfig() {
         const raw = localStorage.getItem(FB_CONFIG_KEY) || "";
         if (!raw) return DEFAULT_FIREBASE_CONFIG;
@@ -3750,8 +3776,10 @@
 
       function applyResultToPlayers_(white, black, result, sign) {
         if (!white || !black || !result) return;
-        if (result === "1-0") white.points += 1 * sign;
-        else if (result === "0-1") black.points += 1 * sign;
+        // "wo-black" = ganan blancas por incomparecencia de negras;
+        // "wo-white" = ganan negras por incomparecencia de blancas.
+        if (result === "1-0" || result === "wo-black") white.points += 1 * sign;
+        else if (result === "0-1" || result === "wo-white") black.points += 1 * sign;
         else if (result === "1/2-1/2") {
           white.points += 0.5 * sign;
           black.points += 0.5 * sign;
@@ -3915,6 +3943,72 @@
             );
           }
           tx.update(fbRoomRef, { players: players.filter((p) => p.id !== playerId) });
+        });
+        return getTournamentStateOnce();
+      }
+
+      // ===== Acciones exclusivas del árbitro sobre el estado de un jugador =====
+      // Estas tres funciones nunca borran historial (played/points/byes quedan
+      // intactos): solo cambian "status", que es lo que buildNextRoundPairings_
+      // usa para decidir a quién emparejar en la próxima ronda.
+
+      // Retira a un jugador: deja de ser emparejado en las próximas rondas,
+      // pero conserva todo su historial y sigue en la tabla de posiciones.
+      async function fbWithdrawPlayer(playerId) {
+        assertReferee();
+        await fbDb.runTransaction(async (tx) => {
+          const snap = await tx.get(fbRoomRef);
+          if (!snap.exists) throw new Error("Todavía no creaste un torneo");
+          const data = snap.data();
+          const players = data.players || [];
+          const idx = players.findIndex((p) => p.id === playerId);
+          if (idx === -1) throw new Error("No se encontró ese jugador");
+          if (players[idx].status === "disqualified") {
+            throw new Error("Este jugador está descalificado, no se puede retirar");
+          }
+          const updated = players.slice();
+          updated[idx] = { ...updated[idx], status: "withdrawn" };
+          tx.update(fbRoomRef, { players: updated });
+        });
+        return getTournamentStateOnce();
+      }
+
+      // Reincorpora a un jugador retirado (vuelve a "active" y se lo vuelve a
+      // emparejar desde la próxima ronda). Un jugador descalificado NO puede
+      // reincorporarse por esta vía: la descalificación es definitiva.
+      async function fbReactivatePlayer(playerId) {
+        assertReferee();
+        await fbDb.runTransaction(async (tx) => {
+          const snap = await tx.get(fbRoomRef);
+          if (!snap.exists) throw new Error("Todavía no creaste un torneo");
+          const data = snap.data();
+          const players = data.players || [];
+          const idx = players.findIndex((p) => p.id === playerId);
+          if (idx === -1) throw new Error("No se encontró ese jugador");
+          if (players[idx].status === "disqualified") {
+            throw new Error("Un jugador descalificado no puede reincorporarse");
+          }
+          const updated = players.slice();
+          updated[idx] = { ...updated[idx], status: "active" };
+          tx.update(fbRoomRef, { players: updated });
+        });
+        return getTournamentStateOnce();
+      }
+
+      // Descalifica a un jugador: igual que retirar (no vuelve a emparejarse,
+      // conserva historial), pero con etiqueta propia y sin vuelta atrás.
+      async function fbDisqualifyPlayer(playerId) {
+        assertReferee();
+        await fbDb.runTransaction(async (tx) => {
+          const snap = await tx.get(fbRoomRef);
+          if (!snap.exists) throw new Error("Todavía no creaste un torneo");
+          const data = snap.data();
+          const players = data.players || [];
+          const idx = players.findIndex((p) => p.id === playerId);
+          if (idx === -1) throw new Error("No se encontró ese jugador");
+          const updated = players.slice();
+          updated[idx] = { ...updated[idx], status: "disqualified" };
+          tx.update(fbRoomRef, { players: updated });
         });
         return getTournamentStateOnce();
       }
@@ -4166,6 +4260,106 @@
         return getTournamentStateOnce();
       }
 
+      // ===== Flujo separado de árbitro: "Cerrar ronda" + "Generar ronda" =====
+      // fbApproveRound (arriba) sigue existiendo tal cual para el admin del
+      // torneo: en un solo paso cierra y genera la ronda siguiente. Estas dos
+      // funciones son el camino alternativo, exclusivo del árbitro, que
+      // separa ambos pasos: primero se cierra la ronda (bloqueando los
+      // resultados para cualquiera que no sea el árbitro) y recién después,
+      // en otro momento si hace falta, se genera la ronda siguiente.
+
+      // Cierra la ronda actual (debe estar "Pendiente de aprobación", es
+      // decir con todos los resultados ya cargados). A partir de acá, esos
+      // resultados quedan bloqueados: solo el árbitro puede corregirlos (ver
+      // el chequeo de "target.locked" en fbSubmitResult). No genera la ronda
+      // siguiente; eso lo hace fbGenerateRoundFromClosed por separado.
+      async function fbCloseRound() {
+        assertReferee();
+        await fbDb.runTransaction(async (tx) => {
+          const snap = await tx.get(fbRoomRef);
+          if (!snap.exists) throw new Error("Todavía no creaste un torneo");
+          const data = snap.data();
+          const meta = { ...data.meta };
+          if (meta.status !== "active" || meta.roundStatus !== "pending_approval") {
+            throw new Error("Solo se puede cerrar una ronda que ya tiene todos los resultados cargados");
+          }
+          const pairings = (data.pairings || []).map((p) => (p.round === meta.round ? { ...p, locked: true } : p));
+          meta.roundStatus = "closed";
+          tx.update(fbRoomRef, { meta, pairings });
+        });
+        return getTournamentStateOnce();
+      }
+
+      // Genera la ronda siguiente a partir de una ronda ya cerrada con
+      // fbCloseRound. Misma lógica de emparejamiento suizo que fbApproveRound,
+      // pero exige que la ronda esté "closed" en vez de "pending_approval".
+      // Exclusivo del árbitro.
+      async function fbGenerateRoundFromClosed() {
+        assertReferee();
+        await fbDb.runTransaction(async (tx) => {
+          const snap = await tx.get(fbRoomRef);
+          if (!snap.exists) throw new Error("Todavía no creaste un torneo");
+          const data = snap.data();
+          const meta = { ...data.meta };
+          if (meta.status !== "active" || meta.roundStatus !== "closed") {
+            throw new Error('Primero hay que "Cerrar ronda" antes de generar la próxima');
+          }
+          const players = (data.players || []).map((p) => ({ ...p, played: (p.played || []).slice() }));
+          const pairingsAll = (data.pairings || []).map((p) => ({ ...p }));
+
+          const timeControl = {
+            minutes: meta.timeControlMinutes || 0,
+            increment: meta.timeControlIncrement || 0,
+          };
+          const { nextRound, newPairings, updatedPlayers, newGames } = buildNextRoundPairings_(
+            players,
+            meta.round,
+            timeControl,
+            pairingsAll
+          );
+
+          meta.round = nextRound;
+          meta.roundStatus = "playing";
+          meta.pendingApprovalAt = null;
+          meta.autoApprovalCancelled = false;
+
+          tx.update(fbRoomRef, {
+            meta,
+            players: updatedPlayers,
+            pairings: pairingsAll.concat(newPairings),
+            games: (data.games || []).concat(newGames),
+          });
+        });
+        return getTournamentStateOnce();
+      }
+
+      // Marca o desmarca una partida como "suspendida" (por ejemplo, un
+      // incidente en el tablero que el árbitro necesita revisar antes de
+      // que se siga jugando). Mientras está suspendida no se puede mover
+      // ninguna pieza (ver fbMakeMove y los bloqueos del lado del cliente).
+      // Exclusivo del árbitro.
+      async function fbSetGameSuspended(round, board, suspended) {
+        assertReferee();
+        round = Number(round);
+        board = Number(board);
+        await fbDb.runTransaction(async (tx) => {
+          const snap = await tx.get(fbRoomRef);
+          if (!snap.exists) throw new Error("Todavía no creaste un torneo");
+          const data = snap.data();
+          const games = (data.games || []).map((g) => ({ ...g }));
+          const g = games.find((x) => x.round === round && x.board === board);
+          if (!g) throw new Error("No se encontró esa partida");
+          if (g.status === "finished") throw new Error("Esa partida ya terminó, no se puede suspender");
+          g.status = suspended ? "suspended" : "ongoing";
+          // Al reanudar, reiniciamos el "reloj de arranque" del turno actual
+          // para no cobrarle a quien tiene el turno el tiempo que la partida
+          // estuvo parada (ver updateTournamentClockDisplay).
+          if (!suspended && g.clock && g.turnStartAt) g.turnStartAt = Date.now();
+          tx.update(fbRoomRef, { games });
+        });
+        return getTournamentStateOnce();
+      }
+
       async function fbSubmitResult(round, board, result) {
         round = Number(round);
         board = Number(board);
@@ -4182,14 +4376,20 @@
           if (!target) throw new Error("No se encontró esa partida");
           if (target.blackId === "") throw new Error("Esa fila es un BYE, no se puede cambiar");
 
-          // Solo el administrador o alguno de los dos jugadores de esta
-          // partida puede cargar/cambiar su resultado (evita que cualquier
-          // usuario cargue resultados de partidas ajenas).
+          // Solo el administrador, el árbitro, o alguno de los dos jugadores
+          // de esta partida puede cargar/cambiar su resultado (evita que
+          // cualquier usuario cargue resultados de partidas ajenas).
           const myEmail = currentUser ? currentUser.email : "";
           const isParticipant =
             myEmail && ((target.whiteEmail || "").toLowerCase() === myEmail || (target.blackEmail || "").toLowerCase() === myEmail);
-          if (!isCurrentUserAdmin(lastTournamentState) && !isParticipant) {
+          if (!isCurrentUserAdmin(lastTournamentState) && !isCurrentUserReferee() && !isParticipant) {
             throw new Error("No tenés permiso para cargar el resultado de esta partida");
+          }
+          // Una ronda ya cerrada por el árbitro (ver fbCloseRound) queda
+          // bloqueada para todos menos para el árbitro, incluso si el
+          // resultado lo había cargado un jugador o el admin.
+          if (target.locked && !isCurrentUserReferee()) {
+            throw new Error("Esta ronda ya fue cerrada por el árbitro; solo el árbitro puede corregir resultados de una ronda cerrada");
           }
 
           // Si ya había un resultado cargado antes, primero deshacemos sus puntos.
@@ -4204,6 +4404,18 @@
             byId[target.blackId].played.push(target.whiteId);
           }
 
+          // Un resultado "wo-white"/"wo-black" (W.O., declarado por el
+          // árbitro) también cierra la partida en vivo del tablero grande,
+          // igual que un resultado normal cargado desde una jugada real.
+          const games = (data.games || []).map((g) => ({ ...g }));
+          if (result === "wo-white" || result === "wo-black") {
+            const g = games.find((x) => x.round === round && x.board === board);
+            if (g) {
+              g.status = "finished";
+              g.resultReason = "wo";
+            }
+          }
+
           // Si con este resultado ya quedaron cargadas todas las partidas de
           // la ronda actual: si ya se jugaron todas las rondas configuradas
           // el torneo se cierra (como antes), y si no, la ronda pasa a
@@ -4214,7 +4426,7 @@
           const meta = { ...data.meta };
           const totalRounds = meta.totalRounds;
 
-          if (meta.status === "active" && meta.roundStatus !== "pending_approval") {
+          if (meta.status === "active" && meta.roundStatus !== "pending_approval" && meta.roundStatus !== "closed") {
             const roundPairings = pairings.filter((p) => p.round === meta.round);
             const allDone = roundPairings.every((p) => p.result);
             if (allDone) {
@@ -4229,7 +4441,7 @@
             }
           }
 
-          tx.update(fbRoomRef, { players, pairings, games: data.games || [], meta });
+          tx.update(fbRoomRef, { players, pairings, games, meta });
         });
         return getTournamentStateOnce();
       }
@@ -4298,6 +4510,7 @@
           const g = games.find((x) => x.round === round && x.board === board);
           if (!g) throw new Error("No se encontró esa partida");
           if (g.status === "finished") throw new Error("Esa partida ya terminó");
+          if (g.status === "suspended") throw new Error("Esta partida está suspendida por el árbitro");
 
           // En una partida con reloj no se deja mover hasta que entraron los
           // dos jugadores (ver "joined"/fbMarkJoined): si uno mueve antes de
@@ -4385,6 +4598,8 @@
         if (result === "1-0") return "1 - 0";
         if (result === "0-1") return "0 - 1";
         if (result === "1/2-1/2") return "½ - ½";
+        if (result === "wo-black") return "WO Blancas (1-0)";
+        if (result === "wo-white") return "WO Negras (0-1)";
         return "";
       }
 
@@ -4406,10 +4621,10 @@
             return;
           }
           if (!record[pr.blackId]) return;
-          if (pr.result === "1-0") {
+          if (pr.result === "1-0" || pr.result === "wo-black") {
             record[pr.whiteId].w += 1;
             record[pr.blackId].l += 1;
-          } else if (pr.result === "0-1") {
+          } else if (pr.result === "0-1" || pr.result === "wo-white") {
             record[pr.whiteId].l += 1;
             record[pr.blackId].w += 1;
           } else if (pr.result === "1/2-1/2") {
@@ -4446,21 +4661,40 @@
         const statusEl = document.getElementById("tournament-approval-status");
         const adminControls = document.getElementById("tournament-approval-admin-controls");
         const autoBox = document.getElementById("tournament-auto-approve-box");
+        const isReferee = isCurrentUserReferee();
+        const isClosed = state.meta.roundStatus === "closed";
 
         if (!isPendingApproval) {
           panel.style.display = "none";
           stopAutoApproveTimer();
+          const refPanel = document.getElementById("tournament-referee-round-controls");
+          if (refPanel) refPanel.style.display = "none";
           return;
         }
 
         panel.style.display = "";
-        adminControls.style.display = isAdmin ? "" : "none";
-        statusEl.textContent = isAdmin
+        adminControls.style.display = isAdmin && !isClosed ? "" : "none";
+        statusEl.textContent = isClosed
+          ? "El árbitro ya cerró esta ronda: los resultados quedaron bloqueados y solo él puede corregirlos. Falta generar la ronda siguiente."
+          : isAdmin
           ? "Ya están cargados todos los resultados de esta ronda. Revisá la tabla de posiciones y los resultados abajo; podés corregir cualquier resultado antes de aprobar."
           : "Ya terminaron todas las partidas de esta ronda. Falta que el administrador la revise y apruebe para que se genere la ronda siguiente.";
 
+        // Controles exclusivos del árbitro: "Cerrar ronda" (bloquea
+        // resultados para todos menos él) y, una vez cerrada, "Generar ronda
+        // siguiente". Son un camino alternativo al botón de arriba (que
+        // sigue siendo el flujo de un solo paso para el admin del torneo).
+        const refPanel = document.getElementById("tournament-referee-round-controls");
+        if (refPanel) {
+          refPanel.style.display = isReferee ? "" : "none";
+          const closeBtn = document.getElementById("tournament-close-round-btn");
+          const genBtn = document.getElementById("tournament-generate-round-btn");
+          if (closeBtn) closeBtn.style.display = isClosed ? "none" : "";
+          if (genBtn) genBtn.style.display = isClosed ? "" : "none";
+        }
+
         const isAuto = state.meta.roundApprovalMode === "auto" && !state.meta.autoApprovalCancelled;
-        if (!isAdmin || !isAuto) {
+        if (!isAdmin || !isAuto || isClosed) {
           autoBox.style.display = "none";
           stopAutoApproveTimer();
           return;
@@ -4526,14 +4760,17 @@
 
         const isAdmin = isCurrentUserAdmin(state);
         const isFinished = state.meta.status === "finished";
-        const isPendingApproval = !isFinished && state.meta.roundStatus === "pending_approval";
+        const isPendingApproval =
+          !isFinished && (state.meta.roundStatus === "pending_approval" || state.meta.roundStatus === "closed");
         const roundsNote = state.meta.totalRounds ? ` de ${state.meta.totalRounds}` : "";
 
         document.getElementById("tournament-title-display").textContent = "🏆 " + state.meta.name;
         document.getElementById("tournament-round-display").textContent = isFinished
           ? `Torneo finalizado — ronda ${state.meta.round}${roundsNote} — ${state.players.length} jugadores`
           : isPendingApproval
-          ? `Ronda ${state.meta.round}${roundsNote} — ⏳ Pendiente de aprobación — ${state.players.length} jugadores`
+          ? `Ronda ${state.meta.round}${roundsNote} — ${
+              state.meta.roundStatus === "closed" ? "🔒 Cerrada, falta generar la siguiente" : "⏳ Pendiente de aprobación"
+            } — ${state.players.length} jugadores`
           : `Ronda ${state.meta.round}${roundsNote} — ${state.players.length} jugadores`;
 
         document.getElementById("tournament-admin-controls").style.display = isAdmin ? "flex" : "none";
@@ -4560,6 +4797,7 @@
         }
 
         const myEmail = currentUser.email;
+        const isReferee = isCurrentUserReferee();
         const currentRoundPairings = state.pairings.filter((p) => p.round === state.meta.round);
         const listEl = document.getElementById("tournament-pairings-list");
         listEl.innerHTML = "";
@@ -4582,7 +4820,9 @@
             const gameStatusText = !game
               ? ""
               : game.status === "finished"
-              ? "Partida terminada"
+              ? "Partida terminada" + (game.resultReason === "wo" ? " (W.O.)" : "")
+              : game.status === "suspended"
+              ? "⏸️ Suspendida por el árbitro"
               : game.lastMoveSan
               ? "En juego · última jugada: " + game.lastMoveSan
               : game.clock && !bothJoined
@@ -4596,7 +4836,17 @@
               ["1/2-1/2", "½-½"],
               ["0-1", "0-1"],
             ];
-            const btnsHtml = isAdmin
+            // Declarar W.O. (incomparecencia) es una acción exclusiva del
+            // árbitro: solo a él se le muestran estos dos botones extra.
+            if (isReferee) {
+              opts.push(["wo-black", "WO Blancas"]);
+              opts.push(["wo-white", "WO Negras"]);
+            }
+            // Una ronda ya cerrada (ver fbCloseRound) queda bloqueada para
+            // todos menos el árbitro: el admin y los jugadores ya solo ven
+            // el resultado (con un candado) en vez de poder tocarlo.
+            const canEditResult = (isAdmin || isReferee) && !(p.locked && !isReferee);
+            const btnsHtml = canEditResult
               ? opts
                   .map(
                     ([val, label]) =>
@@ -4604,19 +4854,28 @@
                   )
                   .join("")
               : p.result
-              ? `<span class="muted">${resultLabel(p.result)}</span>`
+              ? `<span class="muted">${resultLabel(p.result)}${p.locked ? " 🔒" : ""}</span>`
               : "";
             // Cualquiera puede entrar a mirar una partida del torneo, esté o
             // no registrado (no hace falta ser jugador ni admin): si no le
             // toca jugar esa partida, entra como espectador (ver
             // enterTournamentMatch / tournamentMyColor).
             const playBtnHtml = `<button class="btn" data-play-round="${p.round}" data-play-board="${p.board}" data-white="${p.whiteName}" data-black="${p.blackName}" data-white-email="${p.whiteEmail || ""}" data-black-email="${p.blackEmail || ""}">${canPlay ? "▶️ Jugar" : "👁️ Ver"}</button>`;
+            // Suspender/reanudar una partida es exclusivo del árbitro, y solo
+            // tiene sentido mientras la partida sigue en curso.
+            const suspendBtnHtml =
+              isReferee && game && game.status !== "finished"
+                ? `<button class="btn" data-suspend-round="${p.round}" data-suspend-board="${p.board}" data-suspend-action="${
+                    game.status === "suspended" ? "resume" : "suspend"
+                  }">${game.status === "suspended" ? "▶️ Reanudar" : "⏸️ Suspender"}</button>`
+                : "";
             row.innerHTML = `
               <div class="pairing-board">#${p.board}</div>
               <div class="pairing-names">${p.whiteName}<span class="vs">vs</span>${p.blackName}
                 <div class="mini-diagram-caption" style="margin:2px 0 0;text-align:left">${gameStatusText}</div>
               </div>
               ${playBtnHtml}
+              ${suspendBtnHtml}
               <div class="pairing-result-btns">${btnsHtml}</div>
             `;
             listEl.appendChild(row);
@@ -4640,9 +4899,14 @@
             if (tournamentBusy) return;
             tournamentBusy = true;
             try {
-              assertAdmin();
+              if (!isAdmin && !isCurrentUserReferee()) throw new Error("No tenés permiso para cargar resultados");
+              const result = btn.dataset.result;
+              if ((result === "wo-black" || result === "wo-white") && !confirm("¿Confirmás declarar esta partida como W.O. (incomparecencia)?")) {
+                tournamentBusy = false;
+                return;
+              }
               const wasPending = state.meta.roundStatus === "pending_approval";
-              const newState = await fbSubmitResult(btn.dataset.round, btn.dataset.board, btn.dataset.result);
+              const newState = await fbSubmitResult(btn.dataset.round, btn.dataset.board, result);
               if (!wasPending && newState.meta.roundStatus === "pending_approval") {
                 toast("✅ Ya están todos los resultados de la ronda. Revisá y aprobá la siguiente ronda.");
               } else if (!wasPending && newState.meta.status === "finished") {
@@ -4650,6 +4914,22 @@
               }
             } catch (err) {
               toast("❌ No se pudo cargar el resultado: " + err.message);
+            } finally {
+              tournamentBusy = false;
+            }
+          });
+        });
+
+        listEl.querySelectorAll("button[data-suspend-round]").forEach((btn) => {
+          btn.addEventListener("click", async () => {
+            if (tournamentBusy) return;
+            tournamentBusy = true;
+            try {
+              const suspend = btn.dataset.suspendAction === "suspend";
+              await fbSetGameSuspended(btn.dataset.suspendRound, btn.dataset.suspendBoard, suspend);
+              toast(suspend ? "⏸️ Partida suspendida" : "▶️ Partida reanudada");
+            } catch (err) {
+              toast("❌ " + err.message);
             } finally {
               tournamentBusy = false;
             }
@@ -4686,13 +4966,14 @@
       }
 
       // Panel de administración de jugadores: alta, edición (nombre/email) y
-      // baja. Solo visible para el administrador. La edición se hace inline
-      // (la fila se convierte en un mini-formulario) para no depender de
-      // ningún modal nuevo.
+      // baja, solo visible para el administrador. Los botones de estado
+      // (retirar/reincorporar/descalificar) son exclusivos del árbitro, así
+      // que el panel también se muestra si es él, aunque no sea el admin.
       function renderPlayersPanel(state, isAdmin) {
         const card = document.getElementById("tournament-players-card");
         if (!card) return;
-        if (!isAdmin) {
+        const isReferee = isCurrentUserReferee();
+        if (!isAdmin && !isReferee) {
           card.style.display = "none";
           return;
         }
@@ -4714,13 +4995,30 @@
                   <button class="btn" data-cancel-edit-player="1">Cancelar</button>
                 </div>`;
             }
+            const status = p.status || "active";
+            // Acciones de árbitro sobre el estado del jugador: retirar (solo
+            // si está activo), reincorporar (solo si está retirado, nunca si
+            // está descalificado) y descalificar (solo si no lo está ya).
+            const refereeBtns = isReferee
+              ? `
+                ${status === "active" ? `<button class="btn" data-withdraw-player="${p.id}">🚪 Retirar</button>` : ""}
+                ${status === "withdrawn" ? `<button class="btn" data-reactivate-player="${p.id}">↩️ Reincorporar</button>` : ""}
+                ${status !== "disqualified" ? `<button class="btn danger" data-disqualify-player="${p.id}">⛔ Descalificar</button>` : ""}
+              `
+              : "";
+            const adminBtns = isAdmin
+              ? `
+                <button class="btn" data-edit-player="${p.id}">✏️ Editar</button>
+                <button class="btn danger" data-delete-player="${p.id}">🗑️ Eliminar</button>
+              `
+              : "";
             return `
               <div class="pairing-row" data-player-row="${p.id}">
                 <div class="pairing-names">${p.name}${p.email ? ` <span class="muted" style="font-size:12px">(${p.email})</span>` : ""}
                   <div class="mini-diagram-caption" style="margin:2px 0 0;text-align:left">${playerStatusLabel_(p.status)} · ${p.points} pts</div>
                 </div>
-                <button class="btn" data-edit-player="${p.id}">✏️ Editar</button>
-                <button class="btn danger" data-delete-player="${p.id}">🗑️ Eliminar</button>
+                ${refereeBtns}
+                ${adminBtns}
               </div>`;
           })
           .join("");
@@ -4760,6 +5058,43 @@
             try {
               await fbDeletePlayer(playerId);
               toast("✓ Jugador eliminado");
+            } catch (err) {
+              toast("❌ " + err.message);
+            }
+          });
+        });
+        listEl.querySelectorAll("button[data-withdraw-player]").forEach((btn) => {
+          btn.addEventListener("click", async () => {
+            const playerId = btn.dataset.withdrawPlayer;
+            const player = state.players.find((p) => p.id === playerId);
+            if (!confirm(`¿Retirar a ${player ? player.name : "este jugador"} del torneo? Conserva su historial, pero no se lo volverá a emparejar.`)) return;
+            try {
+              await fbWithdrawPlayer(playerId);
+              toast("🚪 Jugador retirado");
+            } catch (err) {
+              toast("❌ " + err.message);
+            }
+          });
+        });
+        listEl.querySelectorAll("button[data-reactivate-player]").forEach((btn) => {
+          btn.addEventListener("click", async () => {
+            const playerId = btn.dataset.reactivatePlayer;
+            try {
+              await fbReactivatePlayer(playerId);
+              toast("↩️ Jugador reincorporado");
+            } catch (err) {
+              toast("❌ " + err.message);
+            }
+          });
+        });
+        listEl.querySelectorAll("button[data-disqualify-player]").forEach((btn) => {
+          btn.addEventListener("click", async () => {
+            const playerId = btn.dataset.disqualifyPlayer;
+            const player = state.players.find((p) => p.id === playerId);
+            if (!confirm(`¿Descalificar a ${player ? player.name : "este jugador"}? Esta acción no tiene vuelta atrás.`)) return;
+            try {
+              await fbDisqualifyPlayer(playerId);
+              toast("⛔ Jugador descalificado");
             } catch (err) {
               toast("❌ " + err.message);
             }
@@ -4857,6 +5192,11 @@
           }
           return;
         }
+        if (gameRow && gameRow.status === "suspended") {
+          statusEl.textContent = "⏸️ El árbitro suspendió esta partida. Esperá novedades antes de seguir jugando.";
+          document.getElementById("tournament-match-controls").style.display = "none";
+          return;
+        }
         const turn = game.turn();
         const turnName = turn === "w" ? tournamentMatchCtx.whiteName : tournamentMatchCtx.blackName;
         if (tournamentClockWaitingForBothPlayers()) {
@@ -4913,10 +5253,12 @@
         if (!gameRow || !gameRow.clock || !wEl || !bEl) return;
         const turn = game.turn();
         const finished = gameRow.status === "finished";
-        const elapsed = finished ? 0 : Math.max(0, Math.round((Date.now() - (gameRow.turnStartAt || Date.now())) / 1000));
+        const suspended = gameRow.status === "suspended";
+        const elapsed =
+          finished || suspended ? 0 : Math.max(0, Math.round((Date.now() - (gameRow.turnStartAt || Date.now())) / 1000));
         const remaining = {
-          w: gameRow.clock.w - (turn === "w" && !finished ? elapsed : 0),
-          b: gameRow.clock.b - (turn === "b" && !finished ? elapsed : 0),
+          w: gameRow.clock.w - (turn === "w" && !finished && !suspended ? elapsed : 0),
+          b: gameRow.clock.b - (turn === "b" && !finished && !suspended ? elapsed : 0),
         };
         const wSecs = Math.max(0, remaining.w);
         const bSecs = Math.max(0, remaining.b);
@@ -4924,10 +5266,10 @@
         const bTime = bEl.querySelector(".clock-time");
         (wTime || wEl).textContent = formatTime(wSecs);
         (bTime || bEl).textContent = formatTime(bSecs);
-        wEl.classList.toggle("active", turn === "w" && !finished);
-        bEl.classList.toggle("active", turn === "b" && !finished);
+        wEl.classList.toggle("active", turn === "w" && !finished && !suspended);
+        bEl.classList.toggle("active", turn === "b" && !finished && !suspended);
 
-        if (!finished && ((turn === "w" && remaining.w <= 0) || (turn === "b" && remaining.b <= 0))) {
+        if (!finished && !suspended && ((turn === "w" && remaining.w <= 0) || (turn === "b" && remaining.b <= 0))) {
           claimTournamentTimeout(turn);
         }
       }
@@ -5369,6 +5711,24 @@
           assertAdmin();
           await fbCancelAutoApproval();
           toast("✖️ Aprobación automática cancelada. Aprobá la ronda a mano cuando quieras.");
+        } catch (err) {
+          toast("❌ " + err.message);
+        }
+      });
+
+      document.getElementById("tournament-close-round-btn").addEventListener("click", async () => {
+        try {
+          await fbCloseRound();
+          toast("🔒 Ronda cerrada: los resultados quedaron bloqueados salvo para vos.");
+        } catch (err) {
+          toast("❌ " + err.message);
+        }
+      });
+
+      document.getElementById("tournament-generate-round-btn").addEventListener("click", async () => {
+        try {
+          await fbGenerateRoundFromClosed();
+          toast("▶️ Se generó y publicó la ronda siguiente.");
         } catch (err) {
           toast("❌ " + err.message);
         }

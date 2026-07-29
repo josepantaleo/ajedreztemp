@@ -2200,6 +2200,15 @@
                     </button>
                   </div>
                 </div>
+
+                <div id="tournament-referee-round-controls" style="display: none; margin-top: 12px">
+                  <p class="muted" style="font-size: 12px; margin: 0 0 8px">
+                    🧑‍⚖️ Modo árbitro: podés cerrar la ronda por separado (bloquea los resultados para todos menos vos) y
+                    generar la ronda siguiente en otro momento.
+                  </p>
+                  <button class="btn" id="tournament-close-round-btn">🔒 Cerrar ronda</button>
+                  <button class="btn primary" id="tournament-generate-round-btn">▶️ Generar ronda siguiente</button>
+                </div>
               </div>
 
               <div class="card" id="tournament-pairings-card">
@@ -2248,8 +2257,9 @@
                 </div>
                 <p class="muted" style="font-size: 12px; margin-top: 8px">
                   Un jugador agregado ya iniciado el torneo entra con 0 puntos y queda disponible recién para la próxima ronda que se
-                  genere. "Eliminar" solo funciona si todavía no jugó ninguna partida; si ya jugó, hay que retirarlo (próximamente) para
-                  no perder su historial.
+                  genere. "Eliminar" solo funciona si todavía no jugó ninguna partida; si ya jugó, usá "Retirar" (o "Descalificar", si
+                  corresponde) para no perder su historial. Retirar/Reincorporar/Descalificar son acciones exclusivas del árbitro del
+                  torneo.
                 </p>
               </div>
             </div>
