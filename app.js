@@ -4024,7 +4024,13 @@
       // automática de la ronda) y fbGenerateRound (para sortear la ronda 1).
       // "pairingsForTiebreak" es el historial completo de emparejamientos
       // del torneo, usado solo para calcular el desempate Buchholz.
-      function buildNextRoundPairings_(players, currentRound, timeControl, pairingsForTiebreak) {
+      // "forcedByeId" (opcional): permite que el árbitro elija a mano qué
+      // jugador descansa esta ronda, en vez de que se elija automáticamente
+      // (por defecto: el de menor puntaje que todavía no tuvo bye). Solo
+      // tiene efecto si la cantidad de jugadores activos es impar; si es
+      // par, se ignora (no hace falta bye). Si el id no corresponde a un
+      // jugador activo, se cae de nuevo al criterio automático.
+      function buildNextRoundPairings_(players, currentRound, timeControl, pairingsForTiebreak, forcedByeId) {
         const nextRound = currentRound + 1;
 
         // Jugadores retirados o descalificados no vuelven a ser emparejados,
@@ -4042,13 +4048,18 @@
 
         let byePlayer = null;
         if (pool.length % 2 === 1) {
-          for (let i = pool.length - 1; i >= 0; i--) {
-            if (pool[i].byes === 0) {
-              byePlayer = pool[i];
-              break;
-            }
+          if (forcedByeId) {
+            byePlayer = pool.find((p) => p.id === forcedByeId) || null;
           }
-          if (!byePlayer) byePlayer = pool[pool.length - 1];
+          if (!byePlayer) {
+            for (let i = pool.length - 1; i >= 0; i--) {
+              if (pool[i].byes === 0) {
+                byePlayer = pool[i];
+                break;
+              }
+            }
+            if (!byePlayer) byePlayer = pool[pool.length - 1];
+          }
           pool = pool.filter((p) => p.id !== byePlayer.id);
         }
 
@@ -4294,8 +4305,11 @@
       // Genera la ronda siguiente a partir de una ronda ya cerrada con
       // fbCloseRound. Misma lógica de emparejamiento suizo que fbApproveRound,
       // pero exige que la ronda esté "closed" en vez de "pending_approval".
-      // Exclusivo del árbitro.
-      async function fbGenerateRoundFromClosed() {
+      // Exclusivo del árbitro. "forcedByeId" (opcional): el árbitro puede
+      // elegir a mano quién descansa esta ronda en vez de dejarlo automático
+      // (ver buildNextRoundPairings_ y el selector "Asignar BYE" del panel
+      // de árbitro).
+      async function fbGenerateRoundFromClosed(forcedByeId) {
         assertReferee();
         await fbDb.runTransaction(async (tx) => {
           const snap = await tx.get(fbRoomRef);
@@ -4308,6 +4322,15 @@
           const players = (data.players || []).map((p) => ({ ...p, played: (p.played || []).slice() }));
           const pairingsAll = (data.pairings || []).map((p) => ({ ...p }));
 
+          if (forcedByeId) {
+            const activeCount = players.filter((p) => (p.status || "active") === "active").length;
+            if (activeCount % 2 === 0) {
+              throw new Error("No hace falta asignar BYE: la cantidad de jugadores activos es par");
+            }
+            const candidate = players.find((p) => p.id === forcedByeId && (p.status || "active") === "active");
+            if (!candidate) throw new Error("El jugador elegido para el BYE no está activo en el torneo");
+          }
+
           const timeControl = {
             minutes: meta.timeControlMinutes || 0,
             increment: meta.timeControlIncrement || 0,
@@ -4316,7 +4339,8 @@
             players,
             meta.round,
             timeControl,
-            pairingsAll
+            pairingsAll,
+            forcedByeId || undefined
           );
 
           meta.round = nextRound;
@@ -4646,6 +4670,185 @@
           });
       }
 
+      // "Recalcular posiciones": el cálculo de puntos/Buchholz que se ve en
+      // pantalla (rankPlayers_) ya se recalcula solo en cada render, a
+      // partir de los pairings. Pero el campo "points" que se guarda en
+      // cada jugador (el que de verdad se usa para armar los próximos
+      // emparejamientos, ver buildNextRoundPairings_) se actualiza a mano,
+      // partida por partida, en cada transacción. Si algún dato queda
+      // desincronizado (por ejemplo, el árbitro corrige el resultado de una
+      // ronda ya cerrada después de que se generaron rondas posteriores),
+      // esta acción reconstruye desde cero "points", "byes", "played" y
+      // "colorBalance" de todos los jugadores usando el historial de
+      // pairings como única fuente de verdad. Exclusiva del árbitro.
+      async function fbRecalculatePositions() {
+        assertReferee();
+        await fbDb.runTransaction(async (tx) => {
+          const snap = await tx.get(fbRoomRef);
+          if (!snap.exists) throw new Error("Todavía no creaste un torneo");
+          const data = snap.data();
+          const players = (data.players || []).map((p) => ({
+            ...p,
+            points: 0,
+            byes: 0,
+            played: [],
+            colorBalance: 0,
+          }));
+          const byId = {};
+          players.forEach((p) => (byId[p.id] = p));
+
+          (data.pairings || [])
+            .slice()
+            .sort((a, b) => a.round - b.round || a.board - b.board)
+            .forEach((pr) => {
+              const white = byId[pr.whiteId];
+              if (!white) return;
+              if (pr.blackId === "") {
+                // BYE: cuenta como partida jugada y ganada, +1 punto.
+                if (pr.result) {
+                  white.byes += 1;
+                  white.points += 1;
+                }
+                return;
+              }
+              const black = byId[pr.blackId];
+              if (!black) return;
+              if (white.played.indexOf(black.id) === -1) white.played.push(black.id);
+              if (black.played.indexOf(white.id) === -1) black.played.push(white.id);
+              white.colorBalance += 1;
+              black.colorBalance -= 1;
+              applyResultToPlayers_(white, black, pr.result, 1);
+            });
+
+          tx.update(fbRoomRef, { players });
+        });
+        return getTournamentStateOnce();
+      }
+
+      // Abre una ventana nueva con los emparejamientos de la ronda actual en
+      // formato apto para imprimir (tablero, blancas, negras y una columna
+      // en blanco para anotar el resultado a mano). No depende de Firebase:
+      // arma el HTML a partir del estado ya cargado en memoria.
+      function printCurrentRoundPairings(state) {
+        const roundPairings = state.pairings
+          .filter((p) => p.round === state.meta.round)
+          .slice()
+          .sort((a, b) => a.board - b.board);
+        const rowsHtml = roundPairings
+          .map(
+            (p) => `
+              <tr>
+                <td>${p.board}</td>
+                <td>${p.whiteName}</td>
+                <td>${p.blackId === "" ? "— (BYE)" : p.blackName}</td>
+                <td>${p.blackId === "" ? "1 - 0" : ""}</td>
+              </tr>`
+          )
+          .join("");
+        const html = `<!DOCTYPE html>
+<html lang="es"><head><meta charset="utf-8">
+<title>Emparejamientos — ${state.meta.name} — Ronda ${state.meta.round}</title>
+<style>
+  body { font-family: Arial, sans-serif; padding: 24px; color: #111; }
+  h1 { font-size: 20px; margin: 0 0 4px; }
+  h2 { font-size: 15px; margin: 0 0 18px; font-weight: normal; color: #444; }
+  table { width: 100%; border-collapse: collapse; }
+  th, td { border: 1px solid #999; padding: 8px 10px; text-align: left; font-size: 14px; }
+  th { background: #eee; }
+  td:first-child, th:first-child { width: 60px; text-align: center; }
+  td:last-child, th:last-child { width: 110px; text-align: center; }
+</style>
+</head><body>
+  <h1>${state.meta.name}</h1>
+  <h2>Emparejamientos — Ronda ${state.meta.round}</h2>
+  <table>
+    <thead><tr><th>Mesa</th><th>Blancas</th><th>Negras</th><th>Resultado</th></tr></thead>
+    <tbody>${rowsHtml}</tbody>
+  </table>
+</body></html>`;
+        const win = window.open("", "_blank");
+        if (!win) {
+          toast("❌ El navegador bloqueó la ventana de impresión. Habilitá pop-ups para este sitio.");
+          return;
+        }
+        win.document.open();
+        win.document.write(html);
+        win.document.close();
+        win.focus();
+        win.onload = () => win.print();
+        // Por si onload no dispara (algunos navegadores con document.write):
+        setTimeout(() => {
+          try {
+            win.print();
+          } catch (err) {
+            /* noop */
+          }
+        }, 300);
+      }
+
+      // Exporta la tabla de posiciones actual a un PDF usando jsPDF (cargado
+      // desde CDN en index.html, window.jspdf). No depende de Firebase.
+      function exportStandingsPDF(state) {
+        if (!window.jspdf || !window.jspdf.jsPDF) {
+          toast("❌ No se pudo cargar la librería de PDF. Revisá tu conexión e intentá de nuevo.");
+          return;
+        }
+        const ranked = rankPlayers_(state.players, state.pairings);
+        const doc = new window.jspdf.jsPDF();
+        const marginX = 14;
+        let y = 18;
+        doc.setFontSize(16);
+        doc.text(state.meta.name || "Torneo", marginX, y);
+        y += 7;
+        doc.setFontSize(11);
+        doc.text(`Tabla de posiciones — Ronda ${state.meta.round}`, marginX, y);
+        y += 10;
+
+        const cols = [
+          { label: "#", w: 10 },
+          { label: "Jugador", w: 70 },
+          { label: "Puntos", w: 22 },
+          { label: "Buchholz", w: 24 },
+          { label: "V-E-D", w: 26 },
+          { label: "Partidas", w: 22 },
+        ];
+        doc.setFontSize(10);
+        doc.setFont(undefined, "bold");
+        let x = marginX;
+        cols.forEach((c) => {
+          doc.text(c.label, x, y);
+          x += c.w;
+        });
+        doc.setFont(undefined, "normal");
+        y += 4;
+        doc.line(marginX, y, x, y);
+        y += 6;
+
+        ranked.forEach((p, i) => {
+          if (y > 280) {
+            doc.addPage();
+            y = 18;
+          }
+          const values = [
+            String(i + 1),
+            p.name,
+            String(p.points),
+            String(p._buchholz),
+            `${p._record.w}-${p._record.d}-${p._record.l}`,
+            String(p.played.length),
+          ];
+          x = marginX;
+          values.forEach((v, idx) => {
+            doc.text(v, x, y);
+            x += cols[idx].w;
+          });
+          y += 7;
+        });
+
+        const safeName = (state.meta.name || "torneo").replace(/[^a-z0-9]+/gi, "_").toLowerCase();
+        doc.save(`posiciones_${safeName}_ronda${state.meta.round}.pdf`);
+      }
+
       let tournamentAutoApproveTimer = null;
 
       function stopAutoApproveTimer() {
@@ -4692,6 +4895,29 @@
           const genBtn = document.getElementById("tournament-generate-round-btn");
           if (closeBtn) closeBtn.style.display = isClosed ? "none" : "";
           if (genBtn) genBtn.style.display = isClosed ? "" : "none";
+
+          // Selector de BYE manual: solo tiene sentido cuando la ronda ya
+          // está cerrada (a un paso de "Generar ronda siguiente") y la
+          // cantidad de jugadores activos es impar, así que va a haber un
+          // BYE de todos modos. Si el árbitro deja "Automático", se
+          // mantiene el criterio de siempre (menor puntaje, sin bye previo).
+          const byeBox = document.getElementById("tournament-manual-bye-box");
+          const byeSelect = document.getElementById("tournament-manual-bye-select");
+          if (byeBox && byeSelect) {
+            const activePlayers = state.players.filter((p) => (p.status || "active") === "active");
+            const needsBye = isClosed && isReferee && activePlayers.length % 2 === 1;
+            byeBox.style.display = needsBye ? "" : "none";
+            if (needsBye) {
+              const ranked = rankPlayers_(activePlayers, state.pairings);
+              const previousValue = byeSelect.value;
+              byeSelect.innerHTML =
+                `<option value="">Automático (por defecto)</option>` +
+                ranked
+                  .map((p) => `<option value="${p.id}">${p.name} — ${p.points} pts${p.byes ? " · ya tuvo BYE" : ""}</option>`)
+                  .join("");
+              if (ranked.some((p) => p.id === previousValue)) byeSelect.value = previousValue;
+            }
+          }
         }
 
         const isAuto = state.meta.roundApprovalMode === "auto" && !state.meta.autoApprovalCancelled;
@@ -4962,6 +5188,13 @@
             Buchholz = suma de puntos de los rivales que enfrentó cada jugador (desempate). V-E-D = victorias-empates-derrotas (el bye cuenta como victoria).
           </p>
         `;
+
+        // Herramientas exclusivas del árbitro sobre emparejamientos y
+        // posiciones: recalcular, imprimir e exportar a PDF (ver
+        // fbRecalculatePositions, printCurrentRoundPairings y
+        // exportStandingsPDF más arriba).
+        const refereeToolsEl = document.getElementById("tournament-referee-tools");
+        if (refereeToolsEl) refereeToolsEl.style.display = isReferee ? "flex" : "none";
 
         renderPlayersPanel(state, isAdmin);
       }
@@ -5728,11 +5961,38 @@
 
       document.getElementById("tournament-generate-round-btn").addEventListener("click", async () => {
         try {
-          await fbGenerateRoundFromClosed();
-          toast("▶️ Se generó y publicó la ronda siguiente.");
+          const byeBox = document.getElementById("tournament-manual-bye-box");
+          const byeSelect = document.getElementById("tournament-manual-bye-select");
+          const forcedByeId = byeBox && byeSelect && byeBox.style.display !== "none" ? byeSelect.value : "";
+          await fbGenerateRoundFromClosed(forcedByeId || undefined);
+          toast(
+            forcedByeId
+              ? "▶️ Se generó la ronda siguiente con el BYE elegido a mano."
+              : "▶️ Se generó y publicó la ronda siguiente."
+          );
         } catch (err) {
           toast("❌ " + err.message);
         }
+      });
+
+      document.getElementById("tournament-recalc-positions-btn").addEventListener("click", async () => {
+        if (!confirm("¿Recalcular las posiciones desde el historial de partidas? Esto corrige cualquier desincronización.")) return;
+        try {
+          await fbRecalculatePositions();
+          toast("🔄 Posiciones recalculadas desde el historial de partidas.");
+        } catch (err) {
+          toast("❌ " + err.message);
+        }
+      });
+
+      document.getElementById("tournament-print-pairings-btn").addEventListener("click", () => {
+        if (!lastTournamentState) return;
+        printCurrentRoundPairings(lastTournamentState);
+      });
+
+      document.getElementById("tournament-export-standings-pdf-btn").addEventListener("click", () => {
+        if (!lastTournamentState) return;
+        exportStandingsPDF(lastTournamentState);
       });
 
       document.getElementById("tournament-reset-btn").addEventListener("click", async () => {

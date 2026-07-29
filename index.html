@@ -2206,6 +2206,24 @@
                     🧑‍⚖️ Modo árbitro: podés cerrar la ronda por separado (bloquea los resultados para todos menos vos) y
                     generar la ronda siguiente en otro momento.
                   </p>
+                  <div id="tournament-manual-bye-box" style="display: none; margin: 10px 0; text-align: left">
+                    <label for="tournament-manual-bye-select" class="muted" style="font-size: 12px; display: block; margin-bottom: 4px">
+                      🎯 Asignar BYE manualmente (queda un jugador impar esta ronda):
+                    </label>
+                    <select
+                      id="tournament-manual-bye-select"
+                      style="
+                        width: 100%;
+                        padding: 8px 10px;
+                        border-radius: 8px;
+                        border: 1px solid var(--surface2);
+                        background: var(--surface);
+                        color: var(--text);
+                      "
+                    >
+                      <option value="">Automático (por defecto)</option>
+                    </select>
+                  </div>
                   <button class="btn" id="tournament-close-round-btn">🔒 Cerrar ronda</button>
                   <button class="btn primary" id="tournament-generate-round-btn">▶️ Generar ronda siguiente</button>
                 </div>
@@ -2218,6 +2236,11 @@
 
               <div class="card" id="tournament-standings-card">
                 <h3>Tabla de posiciones</h3>
+                <div id="tournament-referee-tools" style="display: none; gap: 8px; flex-wrap: wrap; margin-bottom: 12px">
+                  <button class="btn" id="tournament-recalc-positions-btn">🔄 Recalcular posiciones</button>
+                  <button class="btn" id="tournament-print-pairings-btn">🖨️ Imprimir emparejamientos</button>
+                  <button class="btn" id="tournament-export-standings-pdf-btn">📄 Exportar posiciones a PDF</button>
+                </div>
                 <div id="tournament-standings-list"></div>
               </div>
 
@@ -2850,6 +2873,7 @@
     </div>
 
 
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/jspdf/2.5.1/jspdf.umd.min.js"></script>
     <script src="https://cdnjs.cloudflare.com/ajax/libs/chess.js/0.10.3/chess.min.js"></script>
     <script src="https://cdnjs.cloudflare.com/ajax/libs/stockfish.js/10.0.2/stockfish.js"></script>
     <!-- Firebase (Firestore) — base de datos compartida del torneo -->
