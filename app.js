@@ -4879,6 +4879,108 @@
 
       // Exporta la tabla de posiciones actual a un PDF usando jsPDF (cargado
       // desde CDN en index.html, window.jspdf). No depende de Firebase.
+      // Chequea si queda lugar en la página actual del PDF antes de dibujar
+      // la próxima línea; si no, agrega una página nueva y devuelve el "y"
+      // reiniciado. Se usa en todas las tablas del PDF para no cortar filas
+      // a la mitad entre una página y la siguiente.
+      function pdfEnsureSpace_(doc, y, marginTop) {
+        if (y > 280) {
+          doc.addPage();
+          return marginTop;
+        }
+        return y;
+      }
+
+      // Dibuja la tabla de posiciones (ranking, puntos, Buchholz, V-E-D,
+      // partidas jugadas y estado) a partir de "y" y devuelve el "y" donde
+      // quedó libre para seguir escribiendo. La reusan exportStandingsPDF
+      // (solo posiciones) y exportFullTournamentPDF (reporte completo).
+      function pdfDrawStandingsTable_(doc, marginX, y, ranked, includeStatus) {
+        const cols = [
+          { label: "#", w: 10 },
+          { label: "Jugador", w: includeStatus ? 58 : 70 },
+          { label: "Puntos", w: 20 },
+          { label: "Buchholz", w: 22 },
+          { label: "V-E-D", w: 24 },
+          { label: "Partidas", w: 20 },
+        ];
+        if (includeStatus) cols.push({ label: "Estado", w: 30 });
+
+        doc.setFontSize(10);
+        doc.setFont(undefined, "bold");
+        let x = marginX;
+        cols.forEach((c) => {
+          doc.text(c.label, x, y);
+          x += c.w;
+        });
+        doc.setFont(undefined, "normal");
+        y += 4;
+        doc.line(marginX, y, x, y);
+        y += 6;
+
+        ranked.forEach((p, i) => {
+          y = pdfEnsureSpace_(doc, y, 18);
+          const values = [
+            String(i + 1),
+            p.name,
+            String(p.points),
+            String(p._buchholz),
+            `${p._record.w}-${p._record.d}-${p._record.l}`,
+            String(p.played.length),
+          ];
+          if (includeStatus) values.push(playerStatusLabel_(p.status).replace(/^[^\s]+\s/, ""));
+          x = marginX;
+          values.forEach((v, idx) => {
+            doc.text(String(v), x, y);
+            x += cols[idx].w;
+          });
+          y += 7;
+        });
+        return y;
+      }
+
+      // Dibuja la tabla de emparejamientos/resultados de una ronda a partir
+      // de "y" y devuelve el "y" libre siguiente.
+      function pdfDrawPairingsTable_(doc, marginX, y, roundPairings) {
+        const cols = [
+          { label: "Mesa", w: 16 },
+          { label: "Blancas", w: 60 },
+          { label: "Negras", w: 60 },
+          { label: "Resultado", w: 30 },
+        ];
+        doc.setFontSize(10);
+        doc.setFont(undefined, "bold");
+        let x = marginX;
+        cols.forEach((c) => {
+          doc.text(c.label, x, y);
+          x += c.w;
+        });
+        doc.setFont(undefined, "normal");
+        y += 4;
+        doc.line(marginX, y, x, y);
+        y += 6;
+
+        roundPairings
+          .slice()
+          .sort((a, b) => a.board - b.board)
+          .forEach((p) => {
+            y = pdfEnsureSpace_(doc, y, 18);
+            const values = [
+              String(p.board),
+              p.whiteName,
+              p.blackId === "" ? "— (BYE)" : p.blackName,
+              p.result ? resultLabel(p.result) : "—",
+            ];
+            x = marginX;
+            values.forEach((v, idx) => {
+              doc.text(v, x, y);
+              x += cols[idx].w;
+            });
+            y += 7;
+          });
+        return y;
+      }
+
       function exportStandingsPDF(state) {
         if (!window.jspdf || !window.jspdf.jsPDF) {
           toast("❌ No se pudo cargar la librería de PDF. Revisá tu conexión e intentá de nuevo.");
@@ -4895,49 +4997,113 @@
         doc.text(`Tabla de posiciones — Ronda ${state.meta.round}`, marginX, y);
         y += 10;
 
-        const cols = [
-          { label: "#", w: 10 },
-          { label: "Jugador", w: 70 },
-          { label: "Puntos", w: 22 },
-          { label: "Buchholz", w: 24 },
-          { label: "V-E-D", w: 26 },
-          { label: "Partidas", w: 22 },
-        ];
+        pdfDrawStandingsTable_(doc, marginX, y, ranked, false);
+
+        const safeName = (state.meta.name || "torneo").replace(/[^a-z0-9]+/gi, "_").toLowerCase();
+        doc.save(`posiciones_${safeName}_ronda${state.meta.round}.pdf`);
+      }
+
+      // "Imprimir resultados del torneo en PDF (toda la información)": a
+      // diferencia de exportStandingsPDF (solo la tabla de posiciones), este
+      // reporte del administrador arma un PDF completo con: datos generales
+      // del torneo, tabla de posiciones final/actual con estado de cada
+      // jugador, los emparejamientos y resultados de TODAS las rondas
+      // jugadas hasta ahora, y el listado completo de jugadores con su
+      // email y estado. Pensado como acta/registro imprimible del torneo.
+      function exportFullTournamentPDF(state) {
+        if (!window.jspdf || !window.jspdf.jsPDF) {
+          toast("❌ No se pudo cargar la librería de PDF. Revisá tu conexión e intentá de nuevo.");
+          return;
+        }
+        const doc = new window.jspdf.jsPDF();
+        const marginX = 14;
+        let y = 18;
+
+        // --- Portada / datos generales ---
+        doc.setFontSize(18);
+        doc.text(state.meta.name || "Torneo", marginX, y);
+        y += 9;
+        doc.setFontSize(11);
+        const generatedAt = new Date().toLocaleString("es-AR");
+        const statusText = state.meta.status === "finished" ? "Finalizado" : "En curso";
+        const roundsNote = state.meta.totalRounds ? ` de ${state.meta.totalRounds}` : "";
+        const timeControlText =
+          state.meta.timeControlMinutes > 0
+            ? `${state.meta.timeControlMinutes} min` + (state.meta.timeControlIncrement > 0 ? ` + ${state.meta.timeControlIncrement}s` : "")
+            : "Sin reloj";
+        [
+          `Estado: ${statusText}`,
+          `Ronda actual: ${state.meta.round}${roundsNote}`,
+          `Jugadores: ${state.players.length}`,
+          `Control de tiempo: ${timeControlText}`,
+          `Reporte generado: ${generatedAt}`,
+        ].forEach((line) => {
+          doc.text(line, marginX, y);
+          y += 6;
+        });
+        y += 4;
+
+        if (state.meta.status === "finished") {
+          const ranked0 = rankPlayers_(state.players, state.pairings);
+          const topScore = ranked0.length ? ranked0[0].points : 0;
+          const topTB = ranked0.length ? ranked0[0]._buchholz : 0;
+          const champions = ranked0.filter((p) => p.points === topScore && p._buchholz === topTB);
+          doc.setFont(undefined, "bold");
+          doc.text(
+            "Campeón: " + (champions.length > 1 ? champions.map((p) => p.name).join(", ") + " (empate)" : champions[0] ? champions[0].name : "—"),
+            marginX,
+            y
+          );
+          doc.setFont(undefined, "normal");
+          y += 10;
+        }
+
+        // --- Tabla de posiciones ---
+        y = pdfEnsureSpace_(doc, y, 18);
+        doc.setFontSize(13);
+        doc.text("Tabla de posiciones", marginX, y);
+        y += 8;
+        const ranked = rankPlayers_(state.players, state.pairings);
+        y = pdfDrawStandingsTable_(doc, marginX, y, ranked, true);
+        y += 6;
+
+        // --- Emparejamientos y resultados, ronda por ronda ---
+        const maxRound = state.pairings.reduce((m, p) => Math.max(m, p.round), 0);
+        for (let r = 1; r <= maxRound; r++) {
+          const roundPairings = state.pairings.filter((p) => p.round === r);
+          if (roundPairings.length === 0) continue;
+          y = pdfEnsureSpace_(doc, y + 4, 18);
+          doc.setFontSize(13);
+          doc.text(`Ronda ${r}`, marginX, y);
+          y += 8;
+          y = pdfDrawPairingsTable_(doc, marginX, y, roundPairings);
+          y += 6;
+        }
+
+        // --- Listado de jugadores ---
+        y = pdfEnsureSpace_(doc, y + 4, 18);
+        doc.setFontSize(13);
+        doc.text("Jugadores inscriptos", marginX, y);
+        y += 8;
         doc.setFontSize(10);
         doc.setFont(undefined, "bold");
-        let x = marginX;
-        cols.forEach((c) => {
-          doc.text(c.label, x, y);
-          x += c.w;
+        ["Jugador", "Email", "Estado"].forEach((label, i) => {
+          doc.text(label, marginX + [0, 80, 150][i], y);
         });
         doc.setFont(undefined, "normal");
         y += 4;
-        doc.line(marginX, y, x, y);
+        doc.line(marginX, y, marginX + 180, y);
         y += 6;
-
-        ranked.forEach((p, i) => {
-          if (y > 280) {
-            doc.addPage();
-            y = 18;
-          }
-          const values = [
-            String(i + 1),
-            p.name,
-            String(p.points),
-            String(p._buchholz),
-            `${p._record.w}-${p._record.d}-${p._record.l}`,
-            String(p.played.length),
-          ];
-          x = marginX;
-          values.forEach((v, idx) => {
-            doc.text(v, x, y);
-            x += cols[idx].w;
-          });
+        state.players.forEach((p) => {
+          y = pdfEnsureSpace_(doc, y, 18);
+          doc.text(p.name, marginX, y);
+          doc.text(p.email || "—", marginX + 80, y);
+          doc.text(playerStatusLabel_(p.status).replace(/^[^\s]+\s/, ""), marginX + 150, y);
           y += 7;
         });
 
         const safeName = (state.meta.name || "torneo").replace(/[^a-z0-9]+/gi, "_").toLowerCase();
-        doc.save(`posiciones_${safeName}_ronda${state.meta.round}.pdf`);
+        doc.save(`torneo_completo_${safeName}_ronda${state.meta.round}.pdf`);
       }
 
       let tournamentAutoApproveTimer = null;
@@ -6147,6 +6313,16 @@
       document.getElementById("tournament-export-standings-pdf-btn").addEventListener("click", () => {
         if (!lastTournamentState) return;
         exportStandingsPDF(lastTournamentState);
+      });
+
+      document.getElementById("tournament-export-full-pdf-btn").addEventListener("click", () => {
+        try {
+          assertAdmin();
+          if (!lastTournamentState) return;
+          exportFullTournamentPDF(lastTournamentState);
+        } catch (err) {
+          toast("❌ " + err.message);
+        }
       });
 
       document.getElementById("tournament-reset-btn").addEventListener("click", async () => {
