@@ -1984,6 +1984,30 @@
                 regresiva de 30s que se puede cancelar antes de que termine.
               </p>
 
+              <label for="tournament-wo-grace-input" style="display: block; margin: 14px 0 6px; font-weight: 600"
+                >Tiempo reglamentario de espera (minutos)</label
+              >
+              <input
+                type="number"
+                id="tournament-wo-grace-input"
+                min="0"
+                step="1"
+                placeholder="Dejalo vacío o en 0 para desactivar"
+                style="
+                  width: 100%;
+                  padding: 10px 12px;
+                  border-radius: 10px;
+                  border: 1px solid var(--surface2);
+                  background: var(--surface);
+                  color: var(--text);
+                "
+              />
+              <p class="muted" style="font-size: 13px; margin: 6px 0 0">
+                Si un jugador no entra a su partida dentro de este tiempo desde que arrancó la ronda (y el rival sí entró), se le
+                declara WO automáticamente. Dejalo vacío o en 0 para no usar esta regla: seguís pudiendo declarar WO a mano en
+                cualquier momento.
+              </p>
+
               <button class="btn primary" id="tournament-create-btn" style="margin-top: 14px">
                 Crear torneo y sortear ronda 1
               </button>
@@ -2162,6 +2186,30 @@
                   <option value="manual">Manual (requiere aprobación del administrador)</option>
                   <option value="auto">Automático (cuenta regresiva de 30 segundos)</option>
                 </select>
+
+                <label for="tournament-settings-wo-grace-input" style="display: block; margin-bottom: 6px; font-weight: 600"
+                  >Tiempo reglamentario de espera (minutos)</label
+                >
+                <input
+                  type="number"
+                  id="tournament-settings-wo-grace-input"
+                  min="0"
+                  step="1"
+                  placeholder="Dejalo vacío o en 0 para desactivar"
+                  style="
+                    width: 100%;
+                    padding: 10px 12px;
+                    border-radius: 10px;
+                    border: 1px solid var(--surface2);
+                    background: var(--surface);
+                    color: var(--text);
+                    margin-bottom: 6px;
+                  "
+                />
+                <p class="muted" style="font-size: 13px; margin-bottom: 12px">
+                  Si un jugador no entra a su partida dentro de este tiempo (y el rival sí entró), se le declara WO automáticamente.
+                  Se aplica a la ronda en curso apenas se guarda.
+                </p>
 
                 <p class="muted" style="font-size: 13px; margin-bottom: 12px">
                   🔒 El administrador del torneo es fijo:

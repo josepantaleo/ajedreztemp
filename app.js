@@ -3648,6 +3648,10 @@
           roundApprovalMode: "manual",
           pendingApprovalAt: null,
           autoApprovalCancelled: false,
+          // Minutos de tolerancia reglamentaria antes de que una
+          // incomparecencia se convierta en WO automático (0 = deshabilitado,
+          // hay que declararlo a mano como siempre). Ver fbAutoDeclareForfeits.
+          woGraceMinutes: 0,
         };
         if (!data) {
           return { meta: { ...defaults }, players: [], pairings: [], games: [] };
@@ -3787,7 +3791,7 @@
         }
       }
 
-      async function fbCreateTournament(name, playerEntries, totalRounds, adminEmails, timeControl, roundApprovalMode) {
+      async function fbCreateTournament(name, playerEntries, totalRounds, adminEmails, timeControl, roundApprovalMode, woGraceMinutes) {
         if (!isBootstrapping(lastTournamentState)) assertAdmin();
         const seenEmails = new Set();
         for (const p of playerEntries) {
@@ -3832,6 +3836,7 @@
             adminEmails: [TOURNAMENT_ADMIN_EMAIL],
             timeControlMinutes: tc.minutes > 0 ? tc.minutes : 0,
             timeControlIncrement: tc.increment > 0 ? tc.increment : 0,
+            woGraceMinutes: Number(woGraceMinutes) > 0 ? Number(woGraceMinutes) : 0,
           },
           players,
           pairings: [],
@@ -4145,6 +4150,10 @@
             turnStartAt: null,
             increment: increment,
             joined: { w: false, b: false },
+            // Marca de cuándo arrancó la ronda para esta partida: es la
+            // referencia que usa fbAutoDeclareForfeits para saber cuánto
+            // tiempo de tolerancia (meta.woGraceMinutes) ya pasó.
+            startedAt: Date.now(),
           }));
 
         return { nextRound, newPairings, updatedPlayers, newGames };
@@ -4197,6 +4206,7 @@
               adminEmails: data.meta.adminEmails || [],
               timeControlMinutes: timeControl.minutes,
               timeControlIncrement: timeControl.increment,
+              woGraceMinutes: (data.meta && data.meta.woGraceMinutes) || 0,
             },
             players: updatedPlayers,
             pairings: pairingsAll.concat(newPairings),
@@ -4385,6 +4395,82 @@
         return getTournamentStateOnce();
       }
 
+      // Declara WO automático a los jugadores que no entraron a su partida
+      // dentro del "tiempo reglamentario de espera" (meta.woGraceMinutes,
+      // configurable en Ajustes). Se llama periódicamente desde el cliente
+      // del árbitro (ver startWOGraceTimerIfNeeded) mientras la ronda está
+      // en curso ("playing"). Solo actúa cuando, pasado ese tiempo desde que
+      // arrancó la partida (game.startedAt), entró exactamente uno de los
+      // dos jugadores: al otro se le carga la incomparecencia (mismo efecto
+      // que si el árbitro tocara el botón "WO" a mano). Si no entró
+      // ninguno de los dos, no se declara nada automáticamente (queda a
+      // criterio del árbitro, con los botones manuales de siempre): puede
+      // deberse a un problema ajeno a los jugadores y no conviene
+      // perjudicar a ambos sin que un humano lo revise. Devuelve la lista
+      // de partidas a las que se les declaró WO (para el aviso en pantalla).
+      async function fbAutoDeclareForfeits() {
+        assertReferee();
+        let declared = [];
+        await fbDb.runTransaction(async (tx) => {
+          declared = [];
+          const snap = await tx.get(fbRoomRef);
+          if (!snap.exists) return;
+          const data = snap.data();
+          const meta = data.meta || {};
+          const graceMinutes = Number(meta.woGraceMinutes) || 0;
+          if (!graceMinutes || meta.status !== "active" || meta.roundStatus !== "playing") return;
+          const graceMs = graceMinutes * 60000;
+          const now = Date.now();
+
+          const players = (data.players || []).map((p) => ({ ...p, played: (p.played || []).slice() }));
+          const byId = {};
+          players.forEach((p) => (byId[p.id] = p));
+          const pairings = (data.pairings || []).map((p) => ({ ...p }));
+          const games = (data.games || []).map((g) => ({ ...g }));
+
+          games.forEach((g) => {
+            if (g.round !== meta.round || g.status !== "ongoing" || !g.startedAt) return;
+            if (now - g.startedAt < graceMs) return;
+            const joined = g.joined || { w: false, b: false };
+            if (joined.w === joined.b) return; // ninguno entró, o entraron los dos: no es un caso automático
+            const pr = pairings.find((p) => p.round === g.round && p.board === g.board);
+            if (!pr || pr.result) return;
+            const white = byId[pr.whiteId];
+            const black = byId[pr.blackId];
+            if (!white || !black) return;
+
+            const result = joined.w ? "wo-black" : "wo-white"; // gana quien entró
+            applyResultToPlayers_(white, black, result, 1);
+            pr.result = result;
+            if (white.played.indexOf(black.id) === -1) white.played.push(black.id);
+            if (black.played.indexOf(white.id) === -1) black.played.push(white.id);
+            g.status = "finished";
+            g.resultReason = "wo-auto";
+            declared.push({ board: pr.board, winner: joined.w ? white.name : black.name, absent: joined.w ? black.name : white.name });
+          });
+
+          if (declared.length === 0) return;
+
+          const meta2 = { ...meta };
+          const roundPairings = pairings.filter((p) => p.round === meta2.round);
+          const allDone = roundPairings.every((p) => p.result);
+          if (allDone) {
+            const totalRounds = meta2.totalRounds;
+            if (totalRounds && meta2.round >= totalRounds) {
+              meta2.status = "finished";
+              meta2.roundStatus = "playing";
+            } else {
+              meta2.roundStatus = "pending_approval";
+              meta2.pendingApprovalAt = Date.now();
+              meta2.autoApprovalCancelled = false;
+            }
+          }
+
+          tx.update(fbRoomRef, { players, pairings, games, meta: meta2 });
+        });
+        return declared;
+      }
+
       async function fbSubmitResult(round, board, result) {
         round = Number(round);
         board = Number(board);
@@ -4499,7 +4585,7 @@
       // Cambia nombre y/o cantidad de rondas. Solo administradores. La lista
       // de administradores ya no es configurable: queda fija en
       // TOURNAMENT_ADMIN_EMAIL sin importar lo que se pase acá.
-      async function fbUpdateSettings(name, totalRounds, adminEmails, timeControl, roundApprovalMode) {
+      async function fbUpdateSettings(name, totalRounds, adminEmails, timeControl, roundApprovalMode, woGraceMinutes) {
         assertAdmin();
         await fbDb.runTransaction(async (tx) => {
           const snap = await tx.get(fbRoomRef);
@@ -4518,6 +4604,8 @@
               timeControlMinutes: tc.minutes > 0 ? tc.minutes : 0,
               timeControlIncrement: tc.increment > 0 ? tc.increment : 0,
               roundApprovalMode: roundApprovalMode === "auto" ? "auto" : "manual",
+              woGraceMinutes:
+                woGraceMinutes === undefined ? data.meta.woGraceMinutes || 0 : Number(woGraceMinutes) > 0 ? Number(woGraceMinutes) : 0,
             },
           });
         });
@@ -4585,11 +4673,14 @@
       }
 
       // Marca que un jugador (color "w" o "b") entró a mirar/jugar su
-      // partida de torneo. Solo importa para partidas con reloj: hasta que
-      // los dos entraron al menos una vez, no se puede mover (así ninguno
-      // pierde tiempo de reloj por no haber llegado todavía). Cualquiera de
-      // los dos jugadores puede marcar su propia presencia, no hace falta
-      // ser administrador.
+      // partida de torneo. En partidas con reloj, además sirve para no
+      // dejar mover a nadie hasta que los dos entraron al menos una vez
+      // (así ninguno pierde tiempo de reloj por no haber llegado todavía).
+      // Se registra también en partidas sin reloj porque ahora
+      // fbAutoDeclareForfeits usa esta misma marca de presencia para el WO
+      // automático por tiempo de espera reglamentario, tenga o no tenga
+      // reloj el torneo. Cualquiera de los dos jugadores puede marcar su
+      // propia presencia, no hace falta ser administrador.
       async function fbMarkJoined(round, board, color) {
         round = Number(round);
         board = Number(board);
@@ -4599,7 +4690,7 @@
           const data = snap.data();
           const games = (data.games || []).map((g) => ({ ...g }));
           const g = games.find((x) => x.round === round && x.board === board);
-          if (!g || !g.clock) return; // sin reloj no hace falta llevar presencia
+          if (!g) return;
           const joined = g.joined || { w: false, b: false };
           if (joined[color]) return; // ya estaba marcado: no hace falta escribir de nuevo
           g.joined = { ...joined, [color]: true };
@@ -4856,6 +4947,44 @@
         tournamentAutoApproveTimer = null;
       }
 
+      // Chequeo periódico de incomparecencias (ver fbAutoDeclareForfeits):
+      // solo corre en el cliente del árbitro, y solo mientras la ronda está
+      // "playing" y el torneo tiene configurado un tiempo de espera > 0. Se
+      // arranca/para desde renderTournamentState en cada actualización de
+      // estado, igual que el temporizador de aprobación automática.
+      let tournamentWOGraceTimer = null;
+
+      function stopWOGraceTimer() {
+        clearInterval(tournamentWOGraceTimer);
+        tournamentWOGraceTimer = null;
+      }
+
+      function startWOGraceTimerIfNeeded(state) {
+        const graceMinutes = Number(state.meta.woGraceMinutes) || 0;
+        const shouldRun =
+          isCurrentUserReferee() && graceMinutes > 0 && state.meta.status === "active" && state.meta.roundStatus === "playing";
+        if (!shouldRun) {
+          stopWOGraceTimer();
+          return;
+        }
+        if (tournamentWOGraceTimer) return; // ya está corriendo
+        const tick = async () => {
+          try {
+            const declared = await fbAutoDeclareForfeits();
+            if (declared && declared.length > 0) {
+              declared.forEach((d) => {
+                toast(`⏱️ WO automático — mesa #${d.board}: gana ${d.winner} (${d.absent} no se presentó a tiempo)`);
+              });
+            }
+          } catch (err) {
+            // Silencioso: puede fallar si otra pestaña ya resolvió lo mismo,
+            // o si el estado cambió (ronda cerrada, torneo terminado, etc.).
+          }
+        };
+        tick();
+        tournamentWOGraceTimer = setInterval(tick, 15000);
+      }
+
       // Pinta la tarjeta "Ronda pendiente de aprobación": a los jugadores
       // les muestra solo un aviso, y al administrador le muestra el botón
       // "Aprobar ronda" y, si el torneo está en modo automático, la cuenta
@@ -4973,17 +5102,20 @@
         if (!currentUser) {
           setupBox.style.display = "none";
           activeBox.style.display = "none";
+          stopWOGraceTimer();
           return;
         }
 
         if (!state || (state.meta.status !== "active" && state.meta.status !== "finished")) {
           setupBox.style.display = isCurrentUserAdmin(state) ? "" : "none";
           activeBox.style.display = "none";
+          stopWOGraceTimer();
           return;
         }
 
         setupBox.style.display = "none";
         activeBox.style.display = "";
+        startWOGraceTimerIfNeeded(state);
 
         const isAdmin = isCurrentUserAdmin(state);
         const isFinished = state.meta.status === "finished";
@@ -5044,12 +5176,27 @@
             }
             const game = (state.games || []).find((g) => g.round === p.round && g.board === p.board);
             const bothJoined = !game || !game.clock || ((game.joined || {}).w && (game.joined || {}).b);
+            const graceMinutes = Number(state.meta.woGraceMinutes) || 0;
+            const joinedInfo = (game && game.joined) || { w: false, b: false };
+            const onlyOneJoined = game && game.status === "ongoing" && joinedInfo.w !== joinedInfo.b;
+            const woEtaText =
+              graceMinutes > 0 && onlyOneJoined && game.startedAt
+                ? (() => {
+                    const remainingMs = game.startedAt + graceMinutes * 60000 - Date.now();
+                    const absentName = joinedInfo.w ? p.blackName : p.whiteName;
+                    return remainingMs > 0
+                      ? `⏱️ Esperando a ${absentName} — WO automático en ${Math.ceil(remainingMs / 60000)} min`
+                      : `⏱️ Tiempo de espera reglamentario cumplido para ${absentName}`;
+                  })()
+                : "";
             const gameStatusText = !game
               ? ""
               : game.status === "finished"
-              ? "Partida terminada" + (game.resultReason === "wo" ? " (W.O.)" : "")
+              ? "Partida terminada" + (game.resultReason === "wo" || game.resultReason === "wo-auto" ? " (W.O.)" : "")
               : game.status === "suspended"
               ? "⏸️ Suspendida por el árbitro"
+              : woEtaText
+              ? woEtaText
               : game.lastMoveSan
               ? "En juego · última jugada: " + game.lastMoveSan
               : game.clock && !bothJoined
@@ -5847,8 +5994,9 @@
           increment: getIncrementFromSelect("tournament-increment", "tournament-custom-increment"),
         };
         const roundApprovalMode = document.getElementById("tournament-round-mode").value === "auto" ? "auto" : "manual";
+        const woGraceMinutes = document.getElementById("tournament-wo-grace-input").value.trim();
         try {
-          await fbCreateTournament(name, playerEntries, totalRounds, undefined, timeControl, roundApprovalMode);
+          await fbCreateTournament(name, playerEntries, totalRounds, undefined, timeControl, roundApprovalMode, woGraceMinutes);
           await fbGenerateRound();
         } catch (err) {
           toast("❌ No se pudo crear el torneo: " + err.message);
@@ -5900,6 +6048,7 @@
           ["0", "2", "5", "10", "30"]
         );
         document.getElementById("tournament-settings-round-mode").value = state.meta.roundApprovalMode === "auto" ? "auto" : "manual";
+        document.getElementById("tournament-settings-wo-grace-input").value = state.meta.woGraceMinutes || "";
         document.getElementById("tournament-settings-panel").style.display = "";
       });
 
@@ -5922,7 +6071,12 @@
             increment: getIncrementFromSelect("tournament-settings-increment", "tournament-settings-custom-increment"),
           };
           const roundApprovalMode = document.getElementById("tournament-settings-round-mode").value === "auto" ? "auto" : "manual";
-          await fbUpdateSettings(name, totalRounds, [TOURNAMENT_ADMIN_EMAIL], timeControl, roundApprovalMode);
+          const woGraceRaw = document.getElementById("tournament-settings-wo-grace-input").value.trim();
+          if (woGraceRaw && (!/^\d+$/.test(woGraceRaw) || Number(woGraceRaw) < 0)) {
+            toast("❌ El tiempo de espera tiene que ser un número entero de minutos (o dejalo vacío)");
+            return;
+          }
+          await fbUpdateSettings(name, totalRounds, [TOURNAMENT_ADMIN_EMAIL], timeControl, roundApprovalMode, woGraceRaw);
           document.getElementById("tournament-settings-panel").style.display = "none";
           toast("✓ Configuración guardada");
         } catch (err) {
