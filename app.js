@@ -5994,15 +5994,15 @@
         });
       }
 
-      // Panel de administración de jugadores: alta, edición (nombre/email) y
-      // baja, solo visible para el administrador. Los botones de estado
-      // (retirar/reincorporar/descalificar) son exclusivos del árbitro, así
-      // que el panel también se muestra si es él, aunque no sea el admin.
+      // Panel de administración de jugadores (alta, edición de nombre/email,
+      // baja y acciones de estado: retirar/reincorporar/descalificar).
+      // Visible EXCLUSIVAMENTE para el árbitro del torneo; ni siquiera el
+      // administrador lo ve si no es también el árbitro.
       function renderPlayersPanel(state, isAdmin) {
         const card = document.getElementById("tournament-players-card");
         if (!card) return;
         const isReferee = isCurrentUserReferee();
-        if (!isAdmin && !isReferee) {
+        if (!isReferee) {
           card.style.display = "none";
           return;
         }
