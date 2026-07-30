@@ -3965,8 +3965,15 @@
       // cuenta se juegan sus partidas. Solo se puede usar mientras el
       // torneo no haya finalizado; no depende de la ronda, igual que
       // fbAddPlayer, así que también sirve para sumarse a un torneo que ya
-      // arrancó (entra con 0 puntos y participa recién en la próxima ronda
-      // que se genere).
+      // arrancó.
+      //
+      // El jugador entra con status "pending": todavía NO participa del
+      // torneo (activePlayers lo filtra por status === "active", así que no
+      // se lo empareja ni se lo cuenta en la tabla de posiciones "en juego")
+      // hasta que un administrador lo autorice con fbApproveRegistration.
+      // Si el admin lo rechaza (fbRejectRegistration) se lo borra por
+      // completo, ya que un jugador pendiente todavía no jugó ninguna
+      // partida y no deja historial huérfano.
       async function fbSelfRegister(rawName) {
         if (!currentUser) throw new Error("Iniciá sesión con Google primero");
         const name = (rawName || "").trim() || currentUser.displayName;
@@ -3994,9 +4001,55 @@
             played: [],
             byes: 0,
             colorBalance: 0,
-            status: "active",
+            status: "pending",
           };
           tx.update(fbRoomRef, { players: players.concat([newPlayer]) });
+        });
+        return getTournamentStateOnce();
+      }
+
+      // ===== Autorización de inscripciones (exclusivo del administrador) =====
+      // Toda autoinscripción (fbSelfRegister) queda en status "pending" y no
+      // participa del torneo hasta que el administrador la autorice o la
+      // rechace explícitamente con una de estas dos funciones.
+
+      // Autoriza la inscripción: pasa a status "active" y desde la próxima
+      // ronda que se genere ya se lo empareja con normalidad.
+      async function fbApproveRegistration(playerId) {
+        assertAdmin();
+        await fbDb.runTransaction(async (tx) => {
+          const snap = await tx.get(fbRoomRef);
+          if (!snap.exists) throw new Error("Todavía no creaste un torneo");
+          const data = snap.data();
+          const players = data.players || [];
+          const idx = players.findIndex((p) => p.id === playerId);
+          if (idx === -1) throw new Error("No se encontró esa inscripción");
+          if (players[idx].status !== "pending") {
+            throw new Error("Esta inscripción ya fue procesada");
+          }
+          const updated = players.slice();
+          updated[idx] = { ...updated[idx], status: "active" };
+          tx.update(fbRoomRef, { players: updated });
+        });
+        return getTournamentStateOnce();
+      }
+
+      // Rechaza la inscripción: como todavía no jugó ninguna partida, se la
+      // borra directamente en vez de dejarla marcada (no hay historial que
+      // proteger). Si la persona quiere, puede volver a inscribirse.
+      async function fbRejectRegistration(playerId) {
+        assertAdmin();
+        await fbDb.runTransaction(async (tx) => {
+          const snap = await tx.get(fbRoomRef);
+          if (!snap.exists) throw new Error("Todavía no creaste un torneo");
+          const data = snap.data();
+          const players = data.players || [];
+          const idx = players.findIndex((p) => p.id === playerId);
+          if (idx === -1) throw new Error("No se encontró esa inscripción");
+          if (players[idx].status !== "pending") {
+            throw new Error("Esta inscripción ya fue procesada");
+          }
+          tx.update(fbRoomRef, { players: players.filter((p) => p.id !== playerId) });
         });
         return getTournamentStateOnce();
       }
@@ -4817,6 +4870,7 @@
       }
 
       function playerStatusLabel_(status) {
+        if (status === "pending") return "⏳ Pendiente de autorización";
         if (status === "withdrawn") return "🚪 Retirado";
         if (status === "disqualified") return "⛔ Descalificado";
         return "✅ Activo";
@@ -5971,6 +6025,26 @@
                 </div>`;
             }
             const status = p.status || "active";
+            // Una inscripción "pending" todavía no es parte del torneo: no
+            // se le aplican acciones de árbitro (retirar/reincorporar/
+            // descalificar no tienen sentido para alguien que ni siquiera
+            // fue autorizado) ni las de edición/borrado de jugador ya
+            // aceptado. Solo puede ser autorizada o rechazada por el admin.
+            if (status === "pending") {
+              const approvalBtns = isAdmin
+                ? `
+                  <button class="btn primary" data-approve-registration="${p.id}">✅ Autorizar</button>
+                  <button class="btn danger" data-reject-registration="${p.id}">🚫 Rechazar</button>
+                `
+                : `<span class="muted" style="font-size:12px">Esperando autorización del administrador</span>`;
+              return `
+                <div class="pairing-row" data-player-row="${p.id}">
+                  <div class="pairing-names">${p.name}${p.email ? ` <span class="muted" style="font-size:12px">(${p.email})</span>` : ""}
+                    <div class="mini-diagram-caption" style="margin:2px 0 0;text-align:left">${playerStatusLabel_(p.status)}</div>
+                  </div>
+                  ${approvalBtns}
+                </div>`;
+            }
             // Acciones de árbitro sobre el estado del jugador: retirar (solo
             // si está activo), reincorporar (solo si está retirado, nunca si
             // está descalificado) y descalificar (solo si no lo está ya).
@@ -6033,6 +6107,30 @@
             try {
               await fbDeletePlayer(playerId);
               toast("✓ Jugador eliminado");
+            } catch (err) {
+              toast("❌ " + err.message);
+            }
+          });
+        });
+        listEl.querySelectorAll("button[data-approve-registration]").forEach((btn) => {
+          btn.addEventListener("click", async () => {
+            const playerId = btn.dataset.approveRegistration;
+            try {
+              await fbApproveRegistration(playerId);
+              toast("✅ Inscripción autorizada");
+            } catch (err) {
+              toast("❌ " + err.message);
+            }
+          });
+        });
+        listEl.querySelectorAll("button[data-reject-registration]").forEach((btn) => {
+          btn.addEventListener("click", async () => {
+            const playerId = btn.dataset.rejectRegistration;
+            const player = state.players.find((p) => p.id === playerId);
+            if (!confirm(`¿Rechazar la inscripción de ${player ? player.name : "esta persona"}?`)) return;
+            try {
+              await fbRejectRegistration(playerId);
+              toast("🚫 Inscripción rechazada");
             } catch (err) {
               toast("❌ " + err.message);
             }
