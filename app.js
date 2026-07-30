@@ -6324,6 +6324,15 @@
         const wEl = document.getElementById("clock-w");
         const bEl = document.getElementById("clock-b");
         if (!gameRow || !gameRow.clock || !wEl || !bEl) return;
+        // Mientras nuestra propia jugada se está sincronizando con Firestore
+        // (tournamentMatchBusy), game.turn() ya cambió en el cliente pero
+        // gameRow.turnStartAt todavía es el del turno anterior: si acá
+        // siguiéramos calculando "elapsed", ese tiempo de pensada quedaría
+        // mal atribuido al reloj del rival y podría gatillar un reclamo de
+        // tiempo agotado falso apenas después de la primera jugada de cada
+        // uno. Nos salteamos el chequeo y esperamos al próximo tick, que ya
+        // va a tener el gameRow actualizado.
+        if (tournamentMatchBusy) return;
         const turn = game.turn();
         const finished = gameRow.status === "finished";
         const suspended = gameRow.status === "suspended";
