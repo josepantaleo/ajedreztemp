@@ -5649,6 +5649,23 @@
         const isReferee = isCurrentUserReferee();
         const currentRoundPairings = state.pairings.filter((p) => p.round === state.meta.round);
         const listEl = document.getElementById("tournament-pairings-list");
+
+        // Con muchas partidas jugándose a la vez, este onSnapshot se dispara
+        // muy seguido (cada jugada de CUALQUIER mesa reescribe todo el
+        // documento del torneo y le llega a TODOS los conectados: jugadores,
+        // admin y pantalla pública). Antes esto reconstruía las ~N tarjetas
+        // de mesa enteras (con sus botones y listeners) en cada uno de esos
+        // eventos, aunque la mesa de este dispositivo no hubiera cambiado.
+        // Comparamos contra la última data ya pintada y salteamos el rebuild
+        // si es idéntica.
+        const currentRoundGames = (state.games || []).filter((g) => g.round === state.meta.round);
+        const pairingsSignature = JSON.stringify([currentRoundPairings, currentRoundGames, isAdmin, isReferee, myEmail]);
+        if (listEl.dataset.sig === pairingsSignature) {
+          renderStandingsAndPlayers_(state, isAdmin, isReferee);
+          return;
+        }
+        listEl.dataset.sig = pairingsSignature;
+
         listEl.innerHTML = "";
         currentRoundPairings
           .sort((a, b) => a.board - b.board)
@@ -5847,31 +5864,45 @@
           });
         });
 
+        renderStandingsAndPlayers_(state, isAdmin, isReferee);
+      }
+
+      // Clasificación + panel de jugadores: separado de renderTournamentState
+      // para poder saltearlo también (con su propia firma) cuando la lista
+      // de mesas no cambió pero igual hace falta revisar si la clasificación
+      // sí (por ejemplo, cuando el cambio fue un resultado de una ronda
+      // anterior que no toca currentRoundPairings/currentRoundGames).
+      let standingsSignature_ = null;
+      function renderStandingsAndPlayers_(state, isAdmin, isReferee) {
         const standingsEl = document.getElementById("tournament-standings-list");
         const ranked2 = rankPlayers_(state.players, state.pairings);
-        let rows = ranked2
-          .map(
-            (p, i) => `
-            <tr>
-              <td>${i + 1}</td>
-              <td>${p.name}</td>
-              <td>${p.points}</td>
-              <td>${p._buchholz}</td>
-              <td>${p._record.w}-${p._record.d}-${p._record.l}</td>
-              <td>${p.played.length}</td>
-              <td>${playerStatusLabel_(p.status)}</td>
-            </tr>`
-          )
-          .join("");
-        standingsEl.innerHTML = `
-          <table class="standings-table">
-            <thead><tr><th>#</th><th>Jugador</th><th>Puntos</th><th>Buchholz</th><th>V-E-D</th><th>Partidas</th><th>Estado</th></tr></thead>
-            <tbody>${rows}</tbody>
-          </table>
-          <p class="muted" style="font-size: 12px; margin-top: 8px">
-            Buchholz = suma de puntos de los rivales que enfrentó cada jugador (desempate). V-E-D = victorias-empates-derrotas (el bye cuenta como victoria).
-          </p>
-        `;
+        const newStandingsSignature = JSON.stringify([ranked2, isReferee]);
+        if (standingsSignature_ !== newStandingsSignature) {
+          standingsSignature_ = newStandingsSignature;
+          let rows = ranked2
+            .map(
+              (p, i) => `
+              <tr>
+                <td>${i + 1}</td>
+                <td>${p.name}</td>
+                <td>${p.points}</td>
+                <td>${p._buchholz}</td>
+                <td>${p._record.w}-${p._record.d}-${p._record.l}</td>
+                <td>${p.played.length}</td>
+                <td>${playerStatusLabel_(p.status)}</td>
+              </tr>`
+            )
+            .join("");
+          standingsEl.innerHTML = `
+            <table class="standings-table">
+              <thead><tr><th>#</th><th>Jugador</th><th>Puntos</th><th>Buchholz</th><th>V-E-D</th><th>Partidas</th><th>Estado</th></tr></thead>
+              <tbody>${rows}</tbody>
+            </table>
+            <p class="muted" style="font-size: 12px; margin-top: 8px">
+              Buchholz = suma de puntos de los rivales que enfrentó cada jugador (desempate). V-E-D = victorias-empates-derrotas (el bye cuenta como victoria).
+            </p>
+          `;
+        }
 
         // Herramientas exclusivas del árbitro sobre emparejamientos y
         // posiciones: recalcular, imprimir e exportar a PDF (ver
@@ -5931,6 +5962,16 @@
 
         const isFinished = state.meta.status === "finished";
         const roundsNote = state.meta.totalRounds ? ` de ${state.meta.totalRounds}` : "";
+
+        // Esto corre en TODOS los dispositivos conectados (no solo en la
+        // pantalla pública) cada vez que se mueve una pieza en CUALQUIER
+        // mesa del torneo, porque el listener de Firestore es sobre el
+        // documento entero. Con muchas partidas simultáneas eso es muy
+        // seguido, así que salteamos el rebuild si nada de lo que se
+        // muestra acá cambió realmente.
+        const publicSignature = JSON.stringify([state.players, state.pairings, state.meta]);
+        if (contentEl.dataset.sig === publicSignature) return;
+        contentEl.dataset.sig = publicSignature;
 
         document.getElementById("public-screen-name").textContent = state.meta.name || "Torneo";
         document.getElementById("public-screen-round").textContent = isFinished
@@ -6069,6 +6110,10 @@
         if (tournamentEditingPlayerId && !state.players.some((p) => p.id === tournamentEditingPlayerId)) {
           tournamentEditingPlayerId = null;
         }
+
+        const playersSignature = JSON.stringify([state.players, tournamentEditingPlayerId]);
+        if (listEl.dataset.sig === playersSignature) return;
+        listEl.dataset.sig = playersSignature;
 
         listEl.innerHTML = state.players
           .map((p) => {
