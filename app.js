@@ -5567,6 +5567,21 @@
             } — ${state.players.length} jugadores`
           : `Ronda ${state.meta.round}${roundsNote} — ${state.players.length} jugadores`;
 
+        const pendingBadgeEl = document.getElementById("tournament-pending-badge");
+        const pendingCount = state.players.filter((p) => (p.status || "active") === "pending").length;
+        if (pendingBadgeEl) {
+          if ((isAdmin || isCurrentUserReferee()) && pendingCount > 0) {
+            pendingBadgeEl.textContent = `🔔 ${pendingCount} inscripción${pendingCount === 1 ? "" : "es"} pendiente${
+              pendingCount === 1 ? "" : "s"
+            }`;
+            pendingBadgeEl.style.display = "";
+            pendingBadgeEl.style.cursor = "pointer";
+            pendingBadgeEl.title = "Ir a las inscripciones pendientes";
+          } else {
+            pendingBadgeEl.style.display = "none";
+          }
+        }
+
         document.getElementById("tournament-admin-panel").style.display = isAdmin ? "" : "none";
         document.getElementById("tournament-next-round-btn").style.display = !isFinished && state.meta.round === 0 ? "" : "none";
         document.getElementById("tournament-finish-btn").style.display = isFinished ? "none" : "";
@@ -5996,13 +6011,16 @@
 
       // Panel de administración de jugadores (alta, edición de nombre/email,
       // baja y acciones de estado: retirar/reincorporar/descalificar).
-      // Visible EXCLUSIVAMENTE para el árbitro del torneo; ni siquiera el
-      // administrador lo ve si no es también el árbitro.
+      // Visible para el árbitro del torneo y también para el administrador
+      // (aunque no sea árbitro), porque autorizar/rechazar inscripciones
+      // pendientes y editar/eliminar jugadores son acciones de admin, no
+      // solo de árbitro. Dentro de la lista, cada botón sigue mostrándose
+      // solo según corresponda (refereeBtns vs adminBtns más abajo).
       function renderPlayersPanel(state, isAdmin) {
         const card = document.getElementById("tournament-players-card");
         if (!card) return;
         const isReferee = isCurrentUserReferee();
-        if (!isReferee) {
+        if (!isReferee && !isAdmin) {
           card.style.display = "none";
           return;
         }
@@ -6898,6 +6916,17 @@
       });
 
       document.getElementById("tournament-refresh-btn").addEventListener("click", refreshTournament);
+
+      // El badge "🔔 N inscripciones pendientes" (junto al título del torneo)
+      // lleva directo a la tarjeta de jugadores, donde están los botones
+      // Autorizar/Rechazar, sin que el admin tenga que ubicarla a mano.
+      const pendingBadgeBtn = document.getElementById("tournament-pending-badge");
+      if (pendingBadgeBtn) {
+        pendingBadgeBtn.addEventListener("click", () => {
+          const playersCard = document.getElementById("tournament-players-card");
+          if (playersCard) playersCard.scrollIntoView({ behavior: "smooth", block: "start" });
+        });
+      }
 
       // Al entrar a la página, precargar la configuración guardada y conectar
       // (el estado de sesión de Google lo resuelve onAuthStateChanged solo).
