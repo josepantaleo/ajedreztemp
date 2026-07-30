@@ -531,8 +531,14 @@
         }
       }
 
-      // Devuelve el conjunto de casillas cuya pieza está atacada por el rival
+      // Devuelve el conjunto de casillas cuya pieza está atacada por el rival.
+      // Cacheado por FEN: calcular esto implica crear 2 instancias nuevas de
+      // Chess y generar TODAS las jugadas legales de cada bando, algo caro
+      // para hacerlo en cada render si la posición no cambió (por ej. al
+      // solo seleccionar una pieza, sin mover todavía).
+      let threatenedSquaresCache = { fen: null, result: null };
       function getThreatenedSquares(fen) {
+        if (threatenedSquaresCache.fen === fen) return threatenedSquaresCache.result;
         const whiteTargets = computeReachableSquares(fen, "w");
         const blackTargets = computeReachableSquares(fen, "b");
         const temp = new Chess(fen);
@@ -547,6 +553,7 @@
             if (p.color === "b" && whiteTargets.has(sq)) threatened.add(sq);
           }
         }
+        threatenedSquaresCache = { fen, result: threatened };
         return threatened;
       }
 
@@ -599,6 +606,12 @@
         let movedPieceEl = null;
         let capturedSquareEl = null;
 
+        // Antes esto se llamaba adentro del loop (64 veces por render, o sea
+        // se reconstruía el historial completo de la partida 64 veces cada
+        // vez que se movía una pieza). Se calcula una sola vez acá afuera.
+        const fullHistory = game.history({ verbose: true });
+        const lastMove = fullHistory.length > 0 ? fullHistory[fullHistory.length - 1] : null;
+
         for (const r of rows) {
           for (const c of cols) {
             const sqName = squares[c] + (8 - r);
@@ -607,13 +620,9 @@
             square.dataset.square = sqName;
 
             if (selected === sqName) square.classList.add("selected");
-            
-            const history = game.history({ verbose: true });
-            if (history.length > 0) {
-              const lastM = history[history.length - 1];
-              if (lastM.from === sqName || lastM.to === sqName) {
-                square.classList.add("last");
-              }
+
+            if (lastMove && (lastMove.from === sqName || lastMove.to === sqName)) {
+              square.classList.add("last");
             }
 
             // Partidas de torneo: al recibir la jugada del rival se recarga
@@ -732,17 +741,22 @@
         document.getElementById("eval-bar").style.width = percentage + "%";
       }
 
+      // Cuántas medias-jugadas ya están pintadas en el panel de jugadas.
+      // Permite que renderMoves() solo agregue lo nuevo en vez de tirar
+      // abajo y reconstruir toda la lista en cada jugada.
+      let renderedMoveCount = 0;
+
       function renderMoves() {
         const container = document.getElementById("moves");
         const emptyMsg = document.getElementById("moves-empty");
         const countEl = document.getElementById("moves-count");
 
-        container.querySelectorAll(".move-row").forEach((el) => el.remove());
-
         const verboseHistory = game.history({ verbose: true });
         if (countEl) countEl.textContent = verboseHistory.length;
 
         if (!verboseHistory.length) {
+          container.querySelectorAll(".move-row").forEach((el) => el.remove());
+          renderedMoveCount = 0;
           if (emptyMsg) emptyMsg.style.display = "";
           return;
         }
@@ -762,7 +776,30 @@
           return span;
         };
 
-        for (let i = 0; i < verboseHistory.length; i += 2) {
+        // Si el historial se achicó (partida nueva, se cargó otro FEN, etc.)
+        // no hay forma de "agregar" de forma incremental: reconstruimos todo.
+        if (verboseHistory.length < renderedMoveCount) {
+          container.querySelectorAll(".move-row").forEach((el) => el.remove());
+          renderedMoveCount = 0;
+        }
+
+        const prevCurrent = container.querySelector(".move-row.current-move");
+        if (prevCurrent) prevCurrent.classList.remove("current-move");
+
+        let startIndex = renderedMoveCount;
+
+        // La última fila pintada puede tener solo la jugada blanca (le falta
+        // la negra): completarla en vez de crear una fila nueva.
+        if (startIndex % 2 === 1 && startIndex < verboseHistory.length) {
+          const rows = container.querySelectorAll(".move-row");
+          const lastRow = rows[rows.length - 1];
+          if (lastRow) {
+            lastRow.replaceChild(buildMoveSpan(verboseHistory[startIndex]), lastRow.children[2]);
+            startIndex++;
+          }
+        }
+
+        for (let i = startIndex; i < verboseHistory.length; i += 2) {
           const row = document.createElement("div");
           row.className = "move-row";
           const num = document.createElement("span");
@@ -773,6 +810,8 @@
           row.appendChild(verboseHistory[i + 1] ? buildMoveSpan(verboseHistory[i + 1]) : document.createElement("span"));
           container.appendChild(row);
         }
+
+        renderedMoveCount = verboseHistory.length;
 
         const rows = container.querySelectorAll(".move-row");
         if (rows.length) rows[rows.length - 1].classList.add("current-move");
