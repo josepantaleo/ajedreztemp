@@ -3958,6 +3958,49 @@
         return getTournamentStateOnce();
       }
 
+      // Autoinscripción: a diferencia de fbAddPlayer, esta función NO exige
+      // ser admin — la puede llamar cualquier cuenta de Google que haya
+      // iniciado sesión. El email queda fijo al de currentUser (no se puede
+      // anotar en nombre de otra persona) para que la app sepa con qué
+      // cuenta se juegan sus partidas. Solo se puede usar mientras el
+      // torneo no haya finalizado; no depende de la ronda, igual que
+      // fbAddPlayer, así que también sirve para sumarse a un torneo que ya
+      // arrancó (entra con 0 puntos y participa recién en la próxima ronda
+      // que se genere).
+      async function fbSelfRegister(rawName) {
+        if (!currentUser) throw new Error("Iniciá sesión con Google primero");
+        const name = (rawName || "").trim() || currentUser.displayName;
+        if (!name) throw new Error("Ingresá tu nombre");
+        const email = currentUser.email;
+        await fbDb.runTransaction(async (tx) => {
+          const snap = await tx.get(fbRoomRef);
+          if (!snap.exists) throw new Error("Todavía no se creó el torneo");
+          const data = snap.data();
+          if (data.meta && data.meta.status === "finished") {
+            throw new Error("El torneo ya finalizó, no se puede inscribir");
+          }
+          const players = data.players || [];
+          if (players.some((p) => (p.email || "").toLowerCase() === email)) {
+            throw new Error("Ya estás inscripto en este torneo");
+          }
+          let n = players.length + 1;
+          const usedIds = new Set(players.map((p) => p.id));
+          while (usedIds.has("p" + n)) n++;
+          const newPlayer = {
+            id: "p" + n,
+            name,
+            email,
+            points: 0,
+            played: [],
+            byes: 0,
+            colorBalance: 0,
+            status: "active",
+          };
+          tx.update(fbRoomRef, { players: players.concat([newPlayer]) });
+        });
+        return getTournamentStateOnce();
+      }
+
       // Edita solo los datos personales (nombre/email) de un jugador. No toca
       // puntos, partidas jugadas ("played"), byes ni colorBalance, para no
       // afectar su historial de partidas. También actualiza el nombre/email
@@ -5404,6 +5447,33 @@
         tournamentAutoApproveTimer = setInterval(tick, 500);
       }
 
+      // Muestra el formulario de "Inscribirme" a quien todavía no figure en
+      // state.players con su email, o el cartel de confirmación a quien ya
+      // esté anotado. Se llama en cada re-render del torneo (renderTournamentState),
+      // así que refleja en vivo si alguien se acaba de inscribir desde otra pestaña.
+      function renderSelfRegisterCard(state, isFinished) {
+        const card = document.getElementById("tournament-self-register-card");
+        if (!card) return;
+        if (!currentUser || isFinished) {
+          card.style.display = "none";
+          return;
+        }
+        card.style.display = "";
+        const formEl = document.getElementById("tournament-self-register-form");
+        const statusEl = document.getElementById("tournament-self-register-status");
+        const already = state.players.find((p) => (p.email || "").toLowerCase() === currentUser.email);
+        if (already) {
+          formEl.style.display = "none";
+          statusEl.style.display = "";
+          statusEl.textContent = `✓ Ya estás inscripto como "${already.name}" (${playerStatusLabel_(already.status)}).`;
+        } else {
+          formEl.style.display = "flex";
+          statusEl.style.display = "none";
+          const nameInput = document.getElementById("tournament-self-register-name");
+          if (!nameInput.value) nameInput.value = currentUser.displayName || "";
+        }
+      }
+
       function renderTournamentState(state) {
         const setupBox = document.getElementById("tournament-setup-box");
         const activeBox = document.getElementById("tournament-active-box");
@@ -5449,6 +5519,7 @@
         document.getElementById("tournament-reopen-btn").style.display = isFinished ? "" : "none";
         if (!isAdmin) document.getElementById("tournament-settings-panel").style.display = "none";
 
+        renderSelfRegisterCard(state, isFinished);
         renderApprovalPanel(state, isAdmin, isPendingApproval);
 
         const bannerEl = document.getElementById("tournament-champion-banner");
@@ -6492,8 +6563,8 @@
         const name = document.getElementById("tournament-name-input").value.trim() || "Torneo";
         const playerEntries = parsePlayersInput(document.getElementById("tournament-players-input").value);
         const totalRounds = document.getElementById("tournament-rounds-input").value.trim();
-        if (playerEntries.length < 2) {
-          toast("❌ Cargá al menos 2 jugadores");
+        if (playerEntries.length === 1) {
+          toast("❌ Cargá al menos 2 jugadores, o dejá la lista vacía para que se inscriban ellos mismos");
           return;
         }
         if (playerEntries.some((p) => !p.email)) {
@@ -6520,7 +6591,12 @@
         const woGraceMinutes = document.getElementById("tournament-wo-grace-input").value.trim();
         try {
           await fbCreateTournament(name, playerEntries, totalRounds, undefined, timeControl, roundApprovalMode, woGraceMinutes);
-          await fbGenerateRound();
+          if (playerEntries.length >= 2) {
+            await fbGenerateRound();
+            toast("✓ Torneo creado y ronda 1 generada");
+          } else {
+            toast("✓ Torneo creado. Esperá a que se inscriban jugadores y generá la ronda 1 cuando quieras.");
+          }
         } catch (err) {
           toast("❌ No se pudo crear el torneo: " + err.message);
         }
@@ -6699,6 +6775,16 @@
           nameInput.value = "";
           emailInput.value = "";
           toast("✓ Jugador agregado");
+        } catch (err) {
+          toast("❌ " + err.message);
+        }
+      });
+
+      document.getElementById("tournament-self-register-btn").addEventListener("click", async () => {
+        const nameInput = document.getElementById("tournament-self-register-name");
+        try {
+          await fbSelfRegister(nameInput.value);
+          toast("✅ ¡Te inscribiste al torneo!");
         } catch (err) {
           toast("❌ " + err.message);
         }
