@@ -4816,9 +4816,21 @@
         return getTournamentStateOnce();
       }
 
-      async function fbMakeMove(round, board, fen, lastMoveSan, gameOverResult, lastFrom, lastTo) {
+      async function fbMakeMove(round, board, fen, lastMoveSan, gameOverResult, lastFrom, lastTo, clientMoveAt) {
         round = Number(round);
         board = Number(board);
+        // Sello de tiempo tomado en el cliente apenas se hizo la jugada
+        // localmente (ver syncTournamentMove), no el instante en que esta
+        // transacción finalmente se ejecuta. Con muchas mesas jugando a la
+        // vez, todas las jugadas escriben el mismo documento del torneo
+        // (el array "games" completo), así que Firestore hace reintentos
+        // automáticos cuando dos jugadas chocan. Si acá usáramos Date.now()
+        // directo, cada reintento sumaría más tiempo "de pensada" ficticio
+        // al jugador (en realidad es tiempo de congestión, no de pensar), y
+        // con relojes cortos eso puede vaciar el reloj en 1-2 jugadas y dar
+        // la partida por perdida injustamente. Usamos el sello del cliente,
+        // topado por las dudas a que nunca sea posterior al "ahora" real.
+        const effectiveMoveAt = Math.min(clientMoveAt || Date.now(), Date.now());
         await fbDb.runTransaction(async (tx) => {
           const snap = await tx.get(fbRoomRef);
           if (!snap.exists) throw new Error("Todavía no creaste un torneo");
@@ -4851,12 +4863,12 @@
           // recién empieza a correr a partir de esta jugada.
           if (g.clock && fen !== g.fen) {
             const moverColor = new Chess(g.fen).turn();
-            const elapsed = g.turnStartAt ? Math.max(0, Math.round((Date.now() - g.turnStartAt) / 1000)) : 0;
+            const elapsed = g.turnStartAt ? Math.max(0, Math.round((effectiveMoveAt - g.turnStartAt) / 1000)) : 0;
             g.clock = { ...g.clock, [moverColor]: Math.max(0, g.clock[moverColor] - elapsed) };
             if (!gameOverResult && g.increment) {
               g.clock = { ...g.clock, [moverColor]: g.clock[moverColor] + g.increment };
             }
-            g.turnStartAt = Date.now();
+            g.turnStartAt = effectiveMoveAt;
           }
 
           g.fen = fen;
@@ -6630,6 +6642,10 @@
         if (!tournamentMatchActive || !tournamentMatchCtx) return;
         if (!tournamentMyColor()) return; // espectador/admin mirando: no sincroniza jugadas propias
         tournamentMatchBusy = true;
+        // Se toma acá, antes de cualquier ida y vuelta con Firestore: es el
+        // instante real en que el jugador movió, y es lo que fbMakeMove usa
+        // para descontar el reloj (ver el comentario en esa función).
+        const clientMoveAt = Date.now();
         try {
           let gameOverResult = null;
           if (game.in_checkmate()) {
@@ -6645,7 +6661,8 @@
             game.history().slice(-1)[0] || "",
             gameOverResult,
             lastVerboseMove ? lastVerboseMove.from : "",
-            lastVerboseMove ? lastVerboseMove.to : ""
+            lastVerboseMove ? lastVerboseMove.to : "",
+            clientMoveAt
           );
           const gameRow = (state.games || []).find(
             (g) => g.round === tournamentMatchCtx.round && g.board === tournamentMatchCtx.board
