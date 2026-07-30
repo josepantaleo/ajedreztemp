@@ -3674,6 +3674,28 @@
 
       let fbDb = null;
       let fbRoomRef = null;
+      // Cada partida de torneo vive en su propio documento dentro de esta
+      // subcolección (torneos/{room}/games/{round}_{board}), en vez de en
+      // un array "games" adentro del documento principal del torneo. Antes,
+      // CADA jugada de CUALQUIER mesa reescribía ese array completo dentro
+      // de una transacción sobre el documento principal: con muchas mesas
+      // jugando a la vez, todas esas transacciones competían por el mismo
+      // documento y Firestore terminaba reintentando y serializando las
+      // jugadas una detrás de otra (de ahí la lentitud en modo torneo).
+      // Con un documento por partida, una jugada en la mesa 3 ya no tiene
+      // nada que ver con una jugada en la mesa 7: cada una escribe su
+      // propio documento, sin pisarse. El documento principal (fbRoomRef)
+      // ahora solo guarda meta/players/pairings, que cambian mucho menos
+      // seguido (una vez por resultado cargado, no una vez por jugada).
+      let gamesCollectionRef = null;
+      function gameDocId_(round, board) {
+        return round + "_" + board;
+      }
+      // Últimas partidas de la ronda actual (alimentado por
+      // subscribeRoundGames), usado en vez de un inexistente "state.games".
+      let lastRoundGames = [];
+      let gamesRoundUnsub = null;
+      let subscribedRound_ = undefined;
       let tournamentUnsub = null;
       let tournamentBusy = false;
       let lastTournamentState = null;
@@ -3761,13 +3783,12 @@
           woGraceMinutes: 0,
         };
         if (!data) {
-          return { meta: { ...defaults }, players: [], pairings: [], games: [] };
+          return { meta: { ...defaults }, players: [], pairings: [] };
         }
         return {
           meta: Object.assign({ ...defaults }, data.meta || {}),
           players: data.players || [],
           pairings: data.pairings || [],
-          games: data.games || [],
         };
       }
 
@@ -3781,6 +3802,14 @@
           throw new Error("Configuración de Firebase inválida: " + err.message);
         }
         fbRoomRef = fbDb.collection("torneos").doc(room || "main");
+        gamesCollectionRef = fbRoomRef.collection("games");
+        // Nos reconectamos a un torneo (nuevo o distinto "room"): olvidamos
+        // qué ronda teníamos suscripta y limpiamos las partidas ya
+        // cargadas, para que subscribeRoundGames() no se quede pensando
+        // que ya está al día ni se muestren mesas de otra sala por un
+        // instante mientras llega el primer snapshot de la nueva.
+        subscribedRound_ = undefined;
+        lastRoundGames = [];
         document.getElementById("tournament-auth-box").style.display = "";
         if (!authListenerAttached) {
           authListenerAttached = true;
@@ -3844,6 +3873,39 @@
         });
       }
 
+      // Se suscribe a las partidas de UNA ronda puntual (torneos/{room}/games,
+      // filtrado por round). Se vuelve a llamar cada vez que cambia
+      // meta.round, así que en todo momento solo hay un listener activo, y
+      // solo trae los documentos de la ronda que está en juego (no el
+      // historial completo del torneo). Con esto, una jugada en cualquier
+      // mesa sigue actualizando a todos los conectados (necesario para que
+      // la lista de mesas y el reloj se vean en vivo), pero la ESCRITURA de
+      // esa jugada ya no compite con la de ninguna otra mesa (ver
+      // fbMakeMove: cada partida es su propio documento).
+      function subscribeRoundGames(round) {
+        if (subscribedRound_ === round && (gamesRoundUnsub || round == null)) return;
+        if (gamesRoundUnsub) {
+          gamesRoundUnsub();
+          gamesRoundUnsub = null;
+        }
+        subscribedRound_ = round;
+        if (!gamesCollectionRef || round == null) {
+          lastRoundGames = [];
+          return;
+        }
+        gamesRoundUnsub = gamesCollectionRef.where("round", "==", round).onSnapshot(
+          (qsnap) => {
+            lastRoundGames = qsnap.docs.map((d) => d.data());
+            renderTournamentState(lastTournamentState);
+            handleLiveMatchUpdate(lastTournamentState);
+          },
+          () => {
+            // Silencioso: el estado de conexión ya se informa en el
+            // listener principal (subscribeTournament) de abajo.
+          }
+        );
+      }
+
       function subscribeTournament() {
         if (tournamentUnsub) {
           tournamentUnsub();
@@ -3856,6 +3918,8 @@
             statusEl.classList.add("correct");
             const state = normalizeTournamentState(snap.exists ? snap.data() : null);
             lastTournamentState = state;
+            const hasActiveOrFinishedRound = state.meta.status === "active" || state.meta.status === "finished";
+            subscribeRoundGames(hasActiveOrFinishedRound ? state.meta.round : null);
             renderTournamentState(state);
             if (typeof renderPublicScreen === "function") renderPublicScreen(state);
             handleLiveMatchUpdate(state);
@@ -3948,7 +4012,6 @@
           },
           players,
           pairings: [],
-          games: [],
         });
         return getTournamentStateOnce();
       }
@@ -4414,8 +4477,11 @@
             },
             players: updatedPlayers,
             pairings: pairingsAll.concat(newPairings),
-            games: (data.games || []).concat(newGames),
           });
+          // Cada partida nueva es un documento aparte (ver comentario en la
+          // declaración de gamesCollectionRef), así que no hace falta leer
+          // ni tocar las partidas de rondas anteriores para crear estas.
+          newGames.forEach((g) => tx.set(gamesCollectionRef.doc(gameDocId_(g.round, g.board)), g));
         });
         return getTournamentStateOnce();
       }
@@ -4465,8 +4531,8 @@
             meta,
             players: updatedPlayers,
             pairings: pairingsAll.concat(newPairings),
-            games: (data.games || []).concat(newGames),
           });
+          newGames.forEach((g) => tx.set(gamesCollectionRef.doc(gameDocId_(g.round, g.board)), g));
         });
         return getTournamentStateOnce();
       }
@@ -4566,8 +4632,8 @@
             meta,
             players: updatedPlayers,
             pairings: pairingsAll.concat(newPairings),
-            games: (data.games || []).concat(newGames),
           });
+          newGames.forEach((g) => tx.set(gamesCollectionRef.doc(gameDocId_(g.round, g.board)), g));
         });
         return getTournamentStateOnce();
       }
@@ -4581,20 +4647,18 @@
         assertReferee();
         round = Number(round);
         board = Number(board);
+        const gameDocRef = gamesCollectionRef.doc(gameDocId_(round, board));
         await fbDb.runTransaction(async (tx) => {
-          const snap = await tx.get(fbRoomRef);
-          if (!snap.exists) throw new Error("Todavía no creaste un torneo");
-          const data = snap.data();
-          const games = (data.games || []).map((g) => ({ ...g }));
-          const g = games.find((x) => x.round === round && x.board === board);
-          if (!g) throw new Error("No se encontró esa partida");
+          const snap = await tx.get(gameDocRef);
+          if (!snap.exists) throw new Error("No se encontró esa partida");
+          const g = { ...snap.data() };
           if (g.status === "finished") throw new Error("Esa partida ya terminó, no se puede suspender");
           g.status = suspended ? "suspended" : "ongoing";
           // Al reanudar, reiniciamos el "reloj de arranque" del turno actual
           // para no cobrarle a quien tiene el turno el tiempo que la partida
           // estuvo parada (ver updateTournamentClockDisplay).
           if (!suspended && g.clock && g.turnStartAt) g.turnStartAt = Date.now();
-          tx.update(fbRoomRef, { games });
+          tx.update(gameDocRef, g);
         });
         return getTournamentStateOnce();
       }
@@ -4612,50 +4676,86 @@
       // deberse a un problema ajeno a los jugadores y no conviene
       // perjudicar a ambos sin que un humano lo revise. Devuelve la lista
       // de partidas a las que se les declaró WO (para el aviso en pantalla).
+      // Con las partidas repartidas en un documento por mesa, ya no podemos
+      // leer "todas las partidas de la ronda" y el documento principal
+      // dentro de UNA sola transacción (Firestore no permite hacer queries
+      // dentro de una transacción). Este chequeo corre cada 15s y no es
+      // sensible a la performance de las jugadas, así que lo resolvemos en
+      // dos pasos: 1) una lectura normal (no transaccional) para encontrar
+      // qué mesas son candidatas a WO automático, 2) una transacción por
+      // cada mesa candidata (revalidando las condiciones adentro, por si
+      // cambió algo justo en el medio) y 3) una única transacción sobre el
+      // documento principal para sumar los puntos de las mesas que
+      // efectivamente se resolvieron.
       async function fbAutoDeclareForfeits() {
         assertReferee();
-        let declared = [];
+        const meta = lastTournamentState && lastTournamentState.meta;
+        if (!meta) return [];
+        const graceMinutes = Number(meta.woGraceMinutes) || 0;
+        if (!graceMinutes || meta.status !== "active" || meta.roundStatus !== "playing") return [];
+        const graceMs = graceMinutes * 60000;
+        const now = Date.now();
+
+        const qsnap = await gamesCollectionRef.where("round", "==", meta.round).get();
+        const candidates = qsnap.docs
+          .map((d) => ({ ref: d.ref, data: d.data() }))
+          .filter(({ data: g }) => {
+            if (g.status !== "ongoing" || !g.startedAt) return false;
+            if (now - g.startedAt < graceMs) return false;
+            const joined = g.joined || { w: false, b: false };
+            return joined.w !== joined.b; // exactamente uno entró
+          });
+        if (candidates.length === 0) return [];
+
+        const declared = [];
+        for (const { ref } of candidates) {
+          try {
+            await fbDb.runTransaction(async (tx) => {
+              const snap = await tx.get(ref);
+              if (!snap.exists) return;
+              const g = { ...snap.data() };
+              if (g.status !== "ongoing" || !g.startedAt || now - g.startedAt < graceMs) return;
+              const joined = g.joined || { w: false, b: false };
+              if (joined.w === joined.b) return;
+              g.status = "finished";
+              g.resultReason = "wo-auto";
+              g._woWinnerIsWhite = joined.w; // usado abajo, no se guarda tal cual
+              tx.update(ref, { status: g.status, resultReason: g.resultReason });
+              declared.push({ round: g.round, board: g.board, whiteJoined: joined.w });
+            });
+          } catch (err) {
+            // Si otra pestaña del árbitro ya la resolvió, seguimos con las demás.
+          }
+        }
+        if (declared.length === 0) return [];
+
+        const results = [];
         await fbDb.runTransaction(async (tx) => {
-          declared = [];
           const snap = await tx.get(fbRoomRef);
           if (!snap.exists) return;
           const data = snap.data();
-          const meta = data.meta || {};
-          const graceMinutes = Number(meta.woGraceMinutes) || 0;
-          if (!graceMinutes || meta.status !== "active" || meta.roundStatus !== "playing") return;
-          const graceMs = graceMinutes * 60000;
-          const now = Date.now();
-
+          const meta2 = { ...data.meta };
           const players = (data.players || []).map((p) => ({ ...p, played: (p.played || []).slice() }));
           const byId = {};
           players.forEach((p) => (byId[p.id] = p));
           const pairings = (data.pairings || []).map((p) => ({ ...p }));
-          const games = (data.games || []).map((g) => ({ ...g }));
 
-          games.forEach((g) => {
-            if (g.round !== meta.round || g.status !== "ongoing" || !g.startedAt) return;
-            if (now - g.startedAt < graceMs) return;
-            const joined = g.joined || { w: false, b: false };
-            if (joined.w === joined.b) return; // ninguno entró, o entraron los dos: no es un caso automático
-            const pr = pairings.find((p) => p.round === g.round && p.board === g.board);
-            if (!pr || pr.result) return;
+          declared.forEach((d) => {
+            const pr = pairings.find((p) => p.round === d.round && p.board === d.board);
+            if (!pr || pr.result) return; // ya tenía resultado: no lo tocamos de nuevo
             const white = byId[pr.whiteId];
             const black = byId[pr.blackId];
             if (!white || !black) return;
-
-            const result = joined.w ? "wo-black" : "wo-white"; // gana quien entró
+            const result = d.whiteJoined ? "wo-black" : "wo-white"; // gana quien entró
             applyResultToPlayers_(white, black, result, 1);
             pr.result = result;
             if (white.played.indexOf(black.id) === -1) white.played.push(black.id);
             if (black.played.indexOf(white.id) === -1) black.played.push(white.id);
-            g.status = "finished";
-            g.resultReason = "wo-auto";
-            declared.push({ board: pr.board, winner: joined.w ? white.name : black.name, absent: joined.w ? black.name : white.name });
+            results.push({ board: pr.board, winner: d.whiteJoined ? white.name : black.name, absent: d.whiteJoined ? black.name : white.name });
           });
 
-          if (declared.length === 0) return;
+          if (results.length === 0) return;
 
-          const meta2 = { ...meta };
           const roundPairings = pairings.filter((p) => p.round === meta2.round);
           const allDone = roundPairings.every((p) => p.result);
           if (allDone) {
@@ -4670,9 +4770,9 @@
             }
           }
 
-          tx.update(fbRoomRef, { players, pairings, games, meta: meta2 });
+          tx.update(fbRoomRef, { players, pairings, meta: meta2 });
         });
-        return declared;
+        return results;
       }
 
       async function fbSubmitResult(round, board, result) {
@@ -4722,12 +4822,16 @@
           // Un resultado "wo-white"/"wo-black" (W.O., declarado por el
           // árbitro) también cierra la partida en vivo del tablero grande,
           // igual que un resultado normal cargado desde una jugada real.
-          const games = (data.games || []).map((g) => ({ ...g }));
+          // Esa partida es un documento aparte (ver gamesCollectionRef): se
+          // lee y escribe dentro de esta misma transacción, sin tocar el
+          // documento de ninguna otra mesa.
+          let gameDocRef = null;
+          let gameUpdate = null;
           if (result === "wo-white" || result === "wo-black") {
-            const g = games.find((x) => x.round === round && x.board === board);
-            if (g) {
-              g.status = "finished";
-              g.resultReason = "wo";
+            gameDocRef = gamesCollectionRef.doc(gameDocId_(round, board));
+            const gSnap = await tx.get(gameDocRef);
+            if (gSnap.exists) {
+              gameUpdate = { status: "finished", resultReason: "wo" };
             }
           }
 
@@ -4756,7 +4860,8 @@
             }
           }
 
-          tx.update(fbRoomRef, { players, pairings, games, meta });
+          tx.update(fbRoomRef, { players, pairings, meta });
+          if (gameDocRef && gameUpdate) tx.update(gameDocRef, gameUpdate);
         });
         return getTournamentStateOnce();
       }
@@ -4821,23 +4926,22 @@
         board = Number(board);
         // Sello de tiempo tomado en el cliente apenas se hizo la jugada
         // localmente (ver syncTournamentMove), no el instante en que esta
-        // transacción finalmente se ejecuta. Con muchas mesas jugando a la
-        // vez, todas las jugadas escriben el mismo documento del torneo
-        // (el array "games" completo), así que Firestore hace reintentos
-        // automáticos cuando dos jugadas chocan. Si acá usáramos Date.now()
-        // directo, cada reintento sumaría más tiempo "de pensada" ficticio
-        // al jugador (en realidad es tiempo de congestión, no de pensar), y
-        // con relojes cortos eso puede vaciar el reloj en 1-2 jugadas y dar
-        // la partida por perdida injustamente. Usamos el sello del cliente,
-        // topado por las dudas a que nunca sea posterior al "ahora" real.
+        // transacción finalmente se ejecuta. Cada partida es su propio
+        // documento (ver gamesCollectionRef), así que ya no compite con las
+        // jugadas de otras mesas; aun así puede haber algún reintento si
+        // dos clientes de la MISMA mesa escriben casi al mismo tiempo (por
+        // ejemplo, un reclamo de tiempo agotado cruzándose con una jugada).
+        // Si acá usáramos Date.now() directo, cada reintento sumaría más
+        // tiempo "de pensada" ficticio al jugador, y con relojes cortos eso
+        // puede vaciar el reloj en 1-2 jugadas y dar la partida por
+        // perdida injustamente. Usamos el sello del cliente, topado por las
+        // dudas a que nunca sea posterior al "ahora" real.
         const effectiveMoveAt = Math.min(clientMoveAt || Date.now(), Date.now());
+        const gameDocRef = gamesCollectionRef.doc(gameDocId_(round, board));
         await fbDb.runTransaction(async (tx) => {
-          const snap = await tx.get(fbRoomRef);
-          if (!snap.exists) throw new Error("Todavía no creaste un torneo");
-          const data = snap.data();
-          const games = (data.games || []).map((g) => ({ ...g }));
-          const g = games.find((x) => x.round === round && x.board === board);
-          if (!g) throw new Error("No se encontró esa partida");
+          const snap = await tx.get(gameDocRef);
+          if (!snap.exists) throw new Error("No se encontró esa partida");
+          const g = { ...snap.data() };
           if (g.status === "finished") throw new Error("Esa partida ya terminó");
           if (g.status === "suspended") throw new Error("Esta partida está suspendida por el árbitro");
 
@@ -4880,12 +4984,17 @@
           if (lastFrom) g.lastFrom = lastFrom;
           if (lastTo) g.lastTo = lastTo;
           if (gameOverResult) g.status = "finished";
-          tx.update(fbRoomRef, { games });
+          tx.update(gameDocRef, g);
         });
-        if (gameOverResult) {
-          return fbSubmitResult(round, board, gameOverResult);
-        }
-        return getTournamentStateOnce();
+        // fbSubmitResult (cuando hay resultado) y getTournamentStateOnce
+        // (cuando no) ya no traen el documento de la partida, así que lo
+        // adjuntamos acá como "gameRow" para que quienes llaman a
+        // fbMakeMove (syncTournamentMove, resign, tablas, claimTournamentTimeout)
+        // no tengan que hacer una lectura aparte.
+        const state = gameOverResult ? await fbSubmitResult(round, board, gameOverResult) : await getTournamentStateOnce();
+        const gSnap = await gameDocRef.get();
+        state.gameRow = gSnap.exists ? gSnap.data() : null;
+        return state;
       }
 
       // Marca que un jugador (color "w" o "b") entró a mirar/jugar su
@@ -4900,23 +5009,33 @@
       async function fbMarkJoined(round, board, color) {
         round = Number(round);
         board = Number(board);
+        const gameDocRef = gamesCollectionRef.doc(gameDocId_(round, board));
         await fbDb.runTransaction(async (tx) => {
-          const snap = await tx.get(fbRoomRef);
+          const snap = await tx.get(gameDocRef);
           if (!snap.exists) return;
-          const data = snap.data();
-          const games = (data.games || []).map((g) => ({ ...g }));
-          const g = games.find((x) => x.round === round && x.board === board);
-          if (!g) return;
+          const g = snap.data();
           const joined = g.joined || { w: false, b: false };
           if (joined[color]) return; // ya estaba marcado: no hace falta escribir de nuevo
-          g.joined = { ...joined, [color]: true };
-          tx.update(fbRoomRef, { games });
+          tx.update(gameDocRef, { joined: { ...joined, [color]: true } });
         });
       }
 
       async function fbResetAll() {
         assertAdmin();
-        await fbRoomRef.set({ meta: { name: "", round: 0, status: "setup", adminEmails: [], totalRounds: null }, players: [], pairings: [], games: [] });
+        // Las partidas viven en su propia subcolección (ver
+        // gamesCollectionRef): sobrescribir el documento principal con
+        // .set() no las borra solas, hay que borrarlas explícitamente.
+        const gamesSnap = await gamesCollectionRef.get();
+        // Firestore permite hasta 500 operaciones por batch; en la
+        // práctica un torneo escolar nunca se acerca a eso, pero
+        // repartimos en tandas por las dudas de que algún día sí.
+        const docs = gamesSnap.docs;
+        for (let i = 0; i < docs.length; i += 400) {
+          const batch = fbDb.batch();
+          docs.slice(i, i + 400).forEach((d) => batch.delete(d.ref));
+          await batch.commit();
+        }
+        await fbRoomRef.set({ meta: { name: "", round: 0, status: "setup", adminEmails: [], totalRounds: null }, players: [], pairings: [] });
         return getTournamentStateOnce();
       }
 
@@ -5662,15 +5781,18 @@
         const currentRoundPairings = state.pairings.filter((p) => p.round === state.meta.round);
         const listEl = document.getElementById("tournament-pairings-list");
 
-        // Con muchas partidas jugándose a la vez, este onSnapshot se dispara
-        // muy seguido (cada jugada de CUALQUIER mesa reescribe todo el
-        // documento del torneo y le llega a TODOS los conectados: jugadores,
-        // admin y pantalla pública). Antes esto reconstruía las ~N tarjetas
-        // de mesa enteras (con sus botones y listeners) en cada uno de esos
-        // eventos, aunque la mesa de este dispositivo no hubiera cambiado.
-        // Comparamos contra la última data ya pintada y salteamos el rebuild
-        // si es idéntica.
-        const currentRoundGames = (state.games || []).filter((g) => g.round === state.meta.round);
+        // Cada jugada de cualquier mesa sigue avisando a todos los
+        // conectados (jugadores, admin, pantalla pública), porque el
+        // listener de partidas es sobre toda la ronda actual (ver
+        // subscribeRoundGames): eso es necesario para que la lista de
+        // mesas y el reloj se vean en vivo. Lo que ya NO pasa es que la
+        // ESCRITURA de esa jugada compita con la de otra mesa (antes todas
+        // pisaban el mismo documento; ahora cada mesa tiene el suyo, ver
+        // fbMakeMove). Acá seguimos comparando contra la última data ya
+        // pintada y salteamos el rebuild si es idéntica, para no reconstruir
+        // las ~N tarjetas de mesa enteras (con sus botones y listeners) en
+        // cada evento si la mesa de este dispositivo no cambió.
+        const currentRoundGames = lastRoundGames;
         const pairingsSignature = JSON.stringify([currentRoundPairings, currentRoundGames, isAdmin, isReferee, myEmail]);
         if (listEl.dataset.sig === pairingsSignature) {
           renderStandingsAndPlayers_(state, isAdmin, isReferee);
@@ -5700,7 +5822,7 @@
               listEl.appendChild(row);
               return;
             }
-            const game = (state.games || []).find((g) => g.round === p.round && g.board === p.board);
+            const game = lastRoundGames.find((g) => g.round === p.round && g.board === p.board);
             const bothJoined = !game || !game.clock || ((game.joined || {}).w && (game.joined || {}).b);
             const graceMinutes = Number(state.meta.woGraceMinutes) || 0;
             const joinedInfo = (game && game.joined) || { w: false, b: false };
@@ -5976,11 +6098,13 @@
         const roundsNote = state.meta.totalRounds ? ` de ${state.meta.totalRounds}` : "";
 
         // Esto corre en TODOS los dispositivos conectados (no solo en la
-        // pantalla pública) cada vez que se mueve una pieza en CUALQUIER
-        // mesa del torneo, porque el listener de Firestore es sobre el
-        // documento entero. Con muchas partidas simultáneas eso es muy
-        // seguido, así que salteamos el rebuild si nada de lo que se
-        // muestra acá cambió realmente.
+        // pantalla pública) cada vez que cambia el documento principal del
+        // torneo (meta/players/pairings). Ya NO se dispara con cada jugada
+        // de cada mesa: eso ahora vive en documentos aparte por partida
+        // (ver gamesCollectionRef/subscribeRoundGames), así que este
+        // listener solo se activa cuando termina una partida o cambia la
+        // ronda. Igual dejamos la comparación por firma para no rehacer el
+        // HTML si nada de lo que se muestra acá cambió realmente.
         const publicSignature = JSON.stringify([state.players, state.pairings, state.meta]);
         if (contentEl.dataset.sig === publicSignature) return;
         contentEl.dataset.sig = publicSignature;
@@ -6294,6 +6418,8 @@
         try {
           const state = await getTournamentStateOnce();
           lastTournamentState = state;
+          const hasActiveOrFinishedRound = state.meta.status === "active" || state.meta.status === "finished";
+          subscribeRoundGames(hasActiveOrFinishedRound ? state.meta.round : null);
           renderTournamentState(state);
         } catch (err) {
           document.getElementById("tournament-connect-status").textContent = "❌ No se pudo conectar: " + err.message;
@@ -6404,7 +6530,7 @@
       // abierta en el tablero grande (reemplaza el sondeo periódico).
       function handleLiveMatchUpdate(state) {
         if (!tournamentMatchActive || !tournamentMatchCtx) return;
-        const gameRow = (state.games || []).find(
+        const gameRow = lastRoundGames.find(
           (g) => g.round === tournamentMatchCtx.round && g.board === tournamentMatchCtx.board
         );
         if (!gameRow) return;
@@ -6488,9 +6614,7 @@
             game.history().slice(-1)[0] || "",
             result
           );
-          const gameRow = (state.games || []).find(
-            (g) => g.round === tournamentMatchCtx.round && g.board === tournamentMatchCtx.board
-          );
+          const gameRow = state.gameRow;
           if (!tournamentResultShown) {
             tournamentResultShown = true;
             showTournamentResult(result, "tiempo agotado");
@@ -6507,8 +6631,17 @@
 
       async function enterTournamentMatch(round, board, whiteName, blackName, whiteEmail, blackEmail) {
         try {
-          const state = lastTournamentState || (await getTournamentStateOnce());
-          const gameRow = (state.games || []).find((g) => g.round === round && g.board === board);
+          // Se lee directo el documento de esa mesa (ver gamesCollectionRef)
+          // en vez de buscarlo dentro de un state.games que ya no existe;
+          // si la ronda actual ya está suscripta (lo normal), lastRoundGames
+          // ya lo tiene, pero por las dudas de que se entre justo antes de
+          // que llegue el primer snapshot, resolvemos con una lectura directa.
+          const cached = lastRoundGames.find((g) => g.round === round && g.board === board);
+          let gameRow = cached || null;
+          if (!gameRow) {
+            const gSnap = await gamesCollectionRef.doc(gameDocId_(round, board)).get();
+            gameRow = gSnap.exists ? gSnap.data() : null;
+          }
           if (!gameRow) {
             toast("❌ No se encontró esa partida");
             return;
@@ -6664,9 +6797,7 @@
             lastVerboseMove ? lastVerboseMove.to : "",
             clientMoveAt
           );
-          const gameRow = (state.games || []).find(
-            (g) => g.round === tournamentMatchCtx.round && g.board === tournamentMatchCtx.board
-          );
+          const gameRow = state.gameRow;
           if (gameRow) tournamentCurrentGameRow = gameRow;
           if (gameOverResult && !tournamentResultShown) {
             // Se conoce el resultado exacto ya mismo (no hace falta esperar
@@ -6701,9 +6832,7 @@
             game.history().slice(-1)[0] || "",
             myColor === "w" ? "0-1" : "1-0"
           );
-          const gameRow = (state.games || []).find(
-            (g) => g.round === tournamentMatchCtx.round && g.board === tournamentMatchCtx.board
-          );
+          const gameRow = state.gameRow;
           if (!tournamentResultShown) {
             tournamentResultShown = true;
             showTournamentResult(myColor === "w" ? "0-1" : "1-0");
@@ -6733,9 +6862,7 @@
             game.history().slice(-1)[0] || "",
             "1/2-1/2"
           );
-          const gameRow = (state.games || []).find(
-            (g) => g.round === tournamentMatchCtx.round && g.board === tournamentMatchCtx.board
-          );
+          const gameRow = state.gameRow;
           if (!tournamentResultShown) {
             tournamentResultShown = true;
             showTournamentResult("1/2-1/2");
