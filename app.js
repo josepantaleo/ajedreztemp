@@ -59,7 +59,29 @@
       }
 
       function save() {
-        localStorage.setItem("chessSchoolData", JSON.stringify(state));
+        // En modo incógnito de Safari, o si localStorage está lleno/deshabilitado,
+        // setItem puede tirar una excepción. No queremos que eso rompa el resto
+        // de la app (perder una jugada, un guardado, etc.), así que lo contenemos
+        // acá y avisamos una sola vez por sesión.
+        try {
+          localStorage.setItem("chessSchoolData", JSON.stringify(state));
+        } catch (err) {
+          console.error("No se pudo guardar el progreso en localStorage:", err);
+          if (!save._warned) {
+            save._warned = true;
+            toast("⚠️ No se pudo guardar tu progreso en este navegador");
+          }
+        }
+      }
+
+      // Reemplaza a los `toast("❌ " + err.message)` sueltos que había en cada
+      // catch: además de avisarle al usuario, deja el error completo en la
+      // consola (con stack) para poder diagnosticar problemas reales en
+      // producción, que antes se perdían por completo.
+      function showError(err, fallbackMsg) {
+        console.error(err);
+        const msg = err && err.message ? err.message : fallbackMsg || "Ocurrió un error inesperado";
+        toast("❌ " + msg);
       }
 
       function toast(text) {
@@ -3897,6 +3919,18 @@
       // cualquier lista de administradores guardada en Firestore: sin
       // importar qué diga meta.adminEmails, solo esta cuenta puede crear,
       // configurar o reiniciar el torneo.
+      //
+      // ⚠️ SEGURIDAD: esta constante y assertAdmin() son SOLO una
+      // conveniencia de interfaz (ocultar/mostrar botones). No son una
+      // barrera real: cualquiera puede abrir la consola del navegador y
+      // llamar a fbUpdateSettings/fbResetAll/etc. directamente, sin pasar
+      // por assertAdmin(). La única protección efectiva tiene que estar en
+      // las reglas de seguridad de Firestore (request.auth.token.email ==
+      // "ipem146centenario@gmail.com" para las escrituras de admin), que
+      // viven fuera de este archivo. Si esas reglas no existen o son
+      // permisivas ("allow write: if true"), cualquier visitante puede
+      // borrar o alterar el torneo aunque esta pantalla no le muestre los
+      // botones para hacerlo.
       const TOURNAMENT_ADMIN_EMAIL = "ipem146centenario@gmail.com";
       let authListenerAttached = false;
 
@@ -6279,7 +6313,7 @@
               await fbSetGameSuspended(btn.dataset.suspendRound, btn.dataset.suspendBoard, suspend);
               toast(suspend ? "⏸️ Partida suspendida" : "▶️ Partida reanudada");
             } catch (err) {
-              toast("❌ " + err.message);
+              showError(err);
             } finally {
               tournamentBusy = false;
             }
@@ -6565,7 +6599,7 @@
                 await fbApproveAllRegistrations();
                 toast("✅ Todas las inscripciones fueron autorizadas");
               } catch (err) {
-                toast("❌ " + err.message);
+                showError(err);
               }
             });
           }
@@ -6577,7 +6611,7 @@
                 await fbRejectAllRegistrations();
                 toast("🚫 Todas las inscripciones pendientes fueron rechazadas");
               } catch (err) {
-                toast("❌ " + err.message);
+                showError(err);
               }
             });
           }
@@ -6668,7 +6702,7 @@
               tournamentEditingPlayerId = null;
               toast("✓ Jugador actualizado");
             } catch (err) {
-              toast("❌ " + err.message);
+              showError(err);
             }
           });
         });
@@ -6681,7 +6715,7 @@
               await fbDeletePlayer(playerId);
               toast("✓ Jugador eliminado");
             } catch (err) {
-              toast("❌ " + err.message);
+              showError(err);
             }
           });
         });
@@ -6692,7 +6726,7 @@
               await fbApproveRegistration(playerId);
               toast("✅ Inscripción autorizada");
             } catch (err) {
-              toast("❌ " + err.message);
+              showError(err);
             }
           });
         });
@@ -6705,7 +6739,7 @@
               await fbRejectRegistration(playerId);
               toast("🚫 Inscripción rechazada");
             } catch (err) {
-              toast("❌ " + err.message);
+              showError(err);
             }
           });
         });
@@ -6718,7 +6752,7 @@
               await fbWithdrawPlayer(playerId);
               toast("🚪 Jugador retirado");
             } catch (err) {
-              toast("❌ " + err.message);
+              showError(err);
             }
           });
         });
@@ -6729,7 +6763,7 @@
               await fbReactivatePlayer(playerId);
               toast("↩️ Jugador reincorporado");
             } catch (err) {
-              toast("❌ " + err.message);
+              showError(err);
             }
           });
         });
@@ -6742,7 +6776,7 @@
               await fbDisqualifyPlayer(playerId);
               toast("⛔ Jugador descalificado");
             } catch (err) {
-              toast("❌ " + err.message);
+              showError(err);
             }
           });
         });
@@ -7204,7 +7238,7 @@
               : "🏳️ Te rendiste. Resultado cargado."
           );
         } catch (err) {
-          toast("❌ " + err.message);
+          showError(err);
         } finally {
           tournamentMatchBusy = false;
         }
@@ -7234,7 +7268,7 @@
               : "🤝 Tablas cargadas."
           );
         } catch (err) {
-          toast("❌ " + err.message);
+          showError(err);
         } finally {
           tournamentMatchBusy = false;
         }
@@ -7268,7 +7302,7 @@
         try {
           await firebase.auth().signOut();
         } catch (err) {
-          toast("❌ " + err.message);
+          showError(err);
         }
       });
 
@@ -7319,7 +7353,7 @@
         try {
           await fbGenerateRound();
         } catch (err) {
-          toast("❌ " + err.message);
+          showError(err);
         }
       });
 
@@ -7328,7 +7362,7 @@
         try {
           await fbFinishTournament();
         } catch (err) {
-          toast("❌ " + err.message);
+          showError(err);
         }
       });
 
@@ -7336,7 +7370,7 @@
         try {
           await fbReopenTournament();
         } catch (err) {
-          toast("❌ " + err.message);
+          showError(err);
         }
       });
 
@@ -7392,7 +7426,7 @@
           document.getElementById("tournament-settings-panel").style.display = "none";
           toast("✓ Configuración guardada");
         } catch (err) {
-          toast("❌ " + err.message);
+          showError(err);
         }
       });
 
@@ -7402,7 +7436,7 @@
           await fbApproveRound();
           toast("✅ Ronda aprobada: se generó y publicó la ronda siguiente.");
         } catch (err) {
-          toast("❌ " + err.message);
+          showError(err);
         }
       });
 
@@ -7412,7 +7446,7 @@
           await fbCancelAutoApproval();
           toast("✖️ Aprobación automática cancelada. Aprobá la ronda a mano cuando quieras.");
         } catch (err) {
-          toast("❌ " + err.message);
+          showError(err);
         }
       });
 
@@ -7421,7 +7455,7 @@
           await fbCloseRound();
           toast("🔒 Ronda cerrada: los resultados quedaron bloqueados salvo para vos.");
         } catch (err) {
-          toast("❌ " + err.message);
+          showError(err);
         }
       });
 
@@ -7437,7 +7471,7 @@
               : "▶️ Se generó y publicó la ronda siguiente."
           );
         } catch (err) {
-          toast("❌ " + err.message);
+          showError(err);
         }
       });
 
@@ -7447,7 +7481,7 @@
           await fbRecalculatePositions();
           toast("🔄 Posiciones recalculadas desde el historial de partidas.");
         } catch (err) {
-          toast("❌ " + err.message);
+          showError(err);
         }
       });
 
@@ -7467,7 +7501,7 @@
           if (!lastTournamentState) return;
           exportFullTournamentPDF(lastTournamentState);
         } catch (err) {
-          toast("❌ " + err.message);
+          showError(err);
         }
       });
 
@@ -7476,7 +7510,7 @@
         try {
           await fbResetAll();
         } catch (err) {
-          toast("❌ " + err.message);
+          showError(err);
         }
       });
 
@@ -7489,7 +7523,7 @@
           emailInput.value = "";
           toast("✓ Jugador agregado");
         } catch (err) {
-          toast("❌ " + err.message);
+          showError(err);
         }
       });
 
@@ -7499,7 +7533,7 @@
           await fbSelfRegister(nameInput.value);
           toast("✅ ¡Te inscribiste al torneo!");
         } catch (err) {
-          toast("❌ " + err.message);
+          showError(err);
         }
       });
 
