@@ -31,6 +31,11 @@
 
       let state = loadState();
       let toastTimer = null;
+      // Callback opcional que se ejecuta al cerrar el popup de alerta (#alert),
+      // sea por el botón de acción o por tocar afuera del cuadro. Se usa para
+      // que, al terminar una partida de torneo, cerrar el aviso también
+      // vuelva a la pantalla del torneo (ver showTournamentResult).
+      let alertOnClose_ = null;
 
       // Escapa texto antes de insertarlo en innerHTML (o dentro de un
       // atributo entre comillas dobles). Cualquier dato que provenga de un
@@ -71,21 +76,58 @@
         if (variant) box.classList.add("result-" + variant);
         document.getElementById("alert-box-text").textContent = text;
         document.getElementById("alert-analyze-btn").style.display = "none";
+        const backBtn = document.getElementById("alert-back-to-tournament-btn");
+        if (backBtn) backBtn.style.display = "none";
+        alertOnClose_ = null;
         document.getElementById("alert").classList.add("show");
+      }
+
+      // Cierra el popup de alerta y, si hay un callback pendiente (ver
+      // alertOnClose_), lo ejecuta. Se usa tanto para el botón de acción
+      // (analizar / volver al torneo) como para el cierre tocando afuera del
+      // cuadro, así el comportamiento es el mismo sin importar cómo se cierre.
+      function closeAlert_() {
+        document.getElementById("alert").classList.remove("show");
+        const cb = alertOnClose_;
+        alertOnClose_ = null;
+        if (cb) cb();
       }
 
       function offerAnalysis(gameId) {
         const btn = document.getElementById("alert-analyze-btn");
         btn.style.display = "inline-flex";
         btn.onclick = () => {
-          document.getElementById("alert").classList.remove("show");
+          closeAlert_();
           openAnalysisModal(gameId);
         };
       }
 
+      // Crea (una sola vez) el botón "Volver al torneo" dentro del popup de
+      // alerta y lo deja visible. Al tocarlo se cierra el popup y se vuelve a
+      // la pantalla del torneo (exitTournamentMatch), igual que si se toca
+      // afuera del cuadro (ver alertOnClose_ / closeAlert_).
+      function showAlertBackToTournamentButton_() {
+        let btn = document.getElementById("alert-back-to-tournament-btn");
+        if (!btn) {
+          btn = document.createElement("button");
+          btn.id = "alert-back-to-tournament-btn";
+          btn.className = "btn primary";
+          btn.style.marginTop = "10px";
+          const analyzeBtn = document.getElementById("alert-analyze-btn");
+          if (analyzeBtn && analyzeBtn.parentNode) {
+            analyzeBtn.parentNode.insertBefore(btn, analyzeBtn.nextSibling);
+          } else {
+            document.getElementById("alert-box").appendChild(btn);
+          }
+        }
+        btn.textContent = "🏆 Volver al torneo";
+        btn.style.display = "inline-flex";
+        btn.onclick = () => closeAlert_();
+      }
+
       document.getElementById("alert").onclick = (e) => {
         if (e.target.id === "alert") {
-          e.currentTarget.classList.remove("show");
+          closeAlert_();
         }
       };
 
@@ -6674,6 +6716,11 @@
       function showTournamentResult(result, reason) {
         const msg = tournamentResultMessage(result, reason);
         showAlert(msg.text, msg.variant);
+        showAlertBackToTournamentButton_();
+        // Al cerrar este aviso (con el botón o tocando afuera), volvemos a
+        // la pantalla del torneo en vez de dejar al jugador mirando el
+        // tablero de la partida que ya terminó.
+        alertOnClose_ = () => exitTournamentMatch();
       }
 
       function tournamentMyColor() {
