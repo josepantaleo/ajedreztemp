@@ -32,6 +32,18 @@
       let state = loadState();
       let toastTimer = null;
 
+      // Escapa texto antes de insertarlo en innerHTML (o dentro de un
+      // atributo entre comillas dobles). Cualquier dato que provenga de un
+      // jugador (nombre de inscripción, etc.) tiene que pasar por acá antes
+      // de mostrarse: sin esto, alguien podría autoinscribirse con un
+      // "nombre" que en realidad sea HTML/JS y ejecutarlo en el navegador
+      // de otro usuario (admin, árbitro o quien mire la pantalla pública).
+      function escapeHtml_(text) {
+        return String(text == null ? "" : text).replace(/[&<>"']/g, (ch) => {
+          return { "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[ch];
+        });
+      }
+
       function loadState() {
         try {
           const saved = JSON.parse(localStorage.getItem("chessSchoolData"));
@@ -3839,19 +3851,34 @@
       }
 
       // Acepta tanto un objeto JSON válido como el literal de JS que Firebase
-      // muestra en su consola (claves sin comillas), pegado tal cual.
+      // muestra en su consola (claves sin comillas, strings con comillas
+      // simples, coma colgante). Antes esto se resolvía evaluando el texto
+      // pegado con Function(...) (equivalente a eval): si en algún momento
+      // ese cuadro de texto recibía algo que no fuera tecleado a mano por el
+      // propio admin (un link con la config precargada, un valor guardado
+      // en otro lado, etc.), esa vía ejecutaba cualquier código JS incluido
+      // en el texto. Acá se normaliza el texto a JSON estricto y se parsea
+      // con JSON.parse, sin ejecutar nada.
       function parseFirebaseConfigInput(text) {
         const trimmed = text.trim();
         if (!trimmed) throw new Error("Pegá la configuración de Firebase");
         const match = trimmed.match(/\{[\s\S]*\}/);
-        const objText = match ? match[0] : trimmed;
+        let objText = match ? match[0] : trimmed;
         try {
           return JSON.parse(objText);
         } catch (err) {
-          // No es JSON estricto (claves sin comillas, comentarios, etc.):
-          // lo evaluamos como literal de objeto de JS.
-          // eslint-disable-next-line no-new-func
-          return Function('"use strict"; return (' + objText + ");")();
+          // No es JSON estricto: lo normalizamos sin ejecutar código.
+          // 1) Le pone comillas dobles a las claves sin comillas (apiKey: → "apiKey":).
+          objText = objText.replace(/([{,]\s*)([A-Za-z_$][A-Za-z0-9_$]*)(\s*:)/g, '$1"$2"$3');
+          // 2) Convierte strings entre comillas simples a comillas dobles.
+          objText = objText.replace(/'([^'\\]*(?:\\.[^'\\]*)*)'/g, (_, inner) => JSON.stringify(inner));
+          // 3) Quita comas colgantes antes de "}" o "]".
+          objText = objText.replace(/,(\s*[}\]])/g, "$1");
+          try {
+            return JSON.parse(objText);
+          } catch (err2) {
+            throw new Error("No se pudo interpretar la configuración de Firebase. Pegala en formato JSON (con comillas en las claves).");
+          }
         }
       }
 
@@ -5299,15 +5326,15 @@
             (p) => `
               <tr>
                 <td>${p.board}</td>
-                <td>${p.whiteName}</td>
-                <td>${p.blackId === "" ? "— (BYE)" : p.blackName}</td>
+                <td>${escapeHtml_(p.whiteName)}</td>
+                <td>${p.blackId === "" ? "— (BYE)" : escapeHtml_(p.blackName)}</td>
                 <td>${p.blackId === "" ? "1 - 0" : ""}</td>
               </tr>`
           )
           .join("");
         const html = `<!DOCTYPE html>
 <html lang="es"><head><meta charset="utf-8">
-<title>Emparejamientos — ${state.meta.name} — Ronda ${state.meta.round}</title>
+<title>Emparejamientos — ${escapeHtml_(state.meta.name)} — Ronda ${state.meta.round}</title>
 <style>
   body { font-family: Arial, sans-serif; padding: 24px; color: #111; }
   h1 { font-size: 20px; margin: 0 0 4px; }
@@ -5319,7 +5346,7 @@
   td:last-child, th:last-child { width: 110px; text-align: center; }
 </style>
 </head><body>
-  <h1>${state.meta.name}</h1>
+  <h1>${escapeHtml_(state.meta.name)}</h1>
   <h2>Emparejamientos — Ronda ${state.meta.round}</h2>
   <table>
     <thead><tr><th>Mesa</th><th>Blancas</th><th>Negras</th><th>Resultado</th></tr></thead>
@@ -5753,7 +5780,7 @@
               byeSelect.innerHTML =
                 `<option value="">Automático (por defecto)</option>` +
                 ranked
-                  .map((p) => `<option value="${p.id}">${p.name} — ${p.points} pts${p.byes ? " · ya tuvo BYE" : ""}</option>`)
+                  .map((p) => `<option value="${p.id}">${escapeHtml_(p.name)} — ${p.points} pts${p.byes ? " · ya tuvo BYE" : ""}</option>`)
                   .join("");
               if (ranked.some((p) => p.id === previousValue)) byeSelect.value = previousValue;
             }
@@ -5946,7 +5973,7 @@
                   <span class="pairing-status pairing-status-bye">⭐ Punto automático</span>
                 </div>
                 <div class="pairing-card-names">
-                  <span class="pairing-side pairing-side-white">⚪ ${p.whiteName}</span>
+                  <span class="pairing-side pairing-side-white">⚪ ${escapeHtml_(p.whiteName)}</span>
                   <span class="vs">—</span>
                   <span class="pairing-side-empty">Libre</span>
                 </div>
@@ -5964,7 +5991,7 @@
               graceMinutes > 0 && onlyOneJoined && game.startedAt
                 ? (() => {
                     const remainingMs = game.startedAt + graceMinutes * 60000 - Date.now();
-                    const absentName = joinedInfo.w ? p.blackName : p.whiteName;
+                    const absentName = escapeHtml_(joinedInfo.w ? p.blackName : p.whiteName);
                     return remainingMs > 0
                       ? `⏱️ Esperando a ${absentName} — WO automático en ${Math.ceil(remainingMs / 60000)} min`
                       : `⏱️ Tiempo de espera reglamentario cumplido para ${absentName}`;
@@ -6046,7 +6073,7 @@
             // no registrado (no hace falta ser jugador ni admin): si no le
             // toca jugar esa partida, entra como espectador (ver
             // enterTournamentMatch / tournamentMyColor).
-            const playBtnHtml = `<button class="btn" data-play-round="${p.round}" data-play-board="${p.board}" data-white="${p.whiteName}" data-black="${p.blackName}" data-white-email="${p.whiteEmail || ""}" data-black-email="${p.blackEmail || ""}">${canPlay ? "▶️ Jugar" : "👁️ Ver"}</button>`;
+            const playBtnHtml = `<button class="btn" data-play-round="${p.round}" data-play-board="${p.board}" data-white="${escapeHtml_(p.whiteName)}" data-black="${escapeHtml_(p.blackName)}" data-white-email="${escapeHtml_(p.whiteEmail || "")}" data-black-email="${escapeHtml_(p.blackEmail || "")}">${canPlay ? "▶️ Jugar" : "👁️ Ver"}</button>`;
             // Suspender/reanudar una partida es exclusivo del árbitro, y solo
             // tiene sentido mientras la partida sigue en curso.
             const suspendBtnHtml =
@@ -6061,9 +6088,9 @@
                 <span class="pairing-status pairing-status-${statusCls}">${statusText}</span>
               </div>
               <div class="pairing-card-names">
-                <span class="pairing-side pairing-side-white">⚪ ${p.whiteName}</span>
+                <span class="pairing-side pairing-side-white">⚪ ${escapeHtml_(p.whiteName)}</span>
                 <span class="vs">vs</span>
-                <span class="pairing-side pairing-side-black">${p.blackName} ⚫</span>
+                <span class="pairing-side pairing-side-black">${escapeHtml_(p.blackName)} ⚫</span>
               </div>
               ${clockHtml}
               ${gameStatusText ? `<div class="pairing-card-detail">${gameStatusText}</div>` : ""}
@@ -6151,7 +6178,7 @@
               (p, i) => `
               <tr>
                 <td>${i + 1}</td>
-                <td>${p.name}</td>
+                <td>${escapeHtml_(p.name)}</td>
                 <td>${p.points}</td>
                 <td>${p._buchholz}</td>
                 <td>${p._record.w}-${p._record.d}-${p._record.l}</td>
@@ -6192,10 +6219,11 @@
       // llega por subscribeTournament) y no muestra ningún control de
       // administración.
       // =========================
+      // Alias histórico: toda la lógica vive ahora en escapeHtml_ (definida
+      // arriba, junto a loadState), para no tener dos implementaciones del
+      // mismo escape mantenidas por separado.
       function escapePublicScreenHtml_(text) {
-        return String(text == null ? "" : text).replace(/[&<>"']/g, (ch) => {
-          return { "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[ch];
-        });
+        return escapeHtml_(text);
       }
 
       function resultLabelForPairing_(pairing) {
@@ -6456,7 +6484,7 @@
                 : `<span class="muted" style="font-size:12px">Esperando autorización del administrador</span>`;
               return `
                 <div class="pairing-row" data-player-row="${p.id}">
-                  <div class="pairing-names">${p.name}${p.email ? ` <span class="muted" style="font-size:12px">(${p.email})</span>` : ""}
+                  <div class="pairing-names">${escapeHtml_(p.name)}${p.email ? ` <span class="muted" style="font-size:12px">(${escapeHtml_(p.email)})</span>` : ""}
                     <div class="mini-diagram-caption" style="margin:2px 0 0;text-align:left">${playerStatusLabel_(p.status)}</div>
                   </div>
                   ${approvalBtns}
@@ -6480,7 +6508,7 @@
               : "";
             return `
               <div class="pairing-row" data-player-row="${p.id}">
-                <div class="pairing-names">${p.name}${p.email ? ` <span class="muted" style="font-size:12px">(${p.email})</span>` : ""}
+                <div class="pairing-names">${escapeHtml_(p.name)}${p.email ? ` <span class="muted" style="font-size:12px">(${escapeHtml_(p.email)})</span>` : ""}
                   <div class="mini-diagram-caption" style="margin:2px 0 0;text-align:left">${playerStatusLabel_(p.status)} · ${p.points} pts</div>
                 </div>
                 ${refereeBtns}
