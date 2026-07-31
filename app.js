@@ -5174,7 +5174,23 @@
           // acordar tablas sin mover), dejamos lo que ya había guardado.
           if (lastFrom) g.lastFrom = lastFrom;
           if (lastTo) g.lastTo = lastTo;
-          if (gameOverResult) g.status = "finished";
+          if (gameOverResult) {
+            g.status = "finished";
+            // Guardamos el resultado acá, en el propio documento de la
+            // partida, además de en meta.pairings (que actualiza
+            // fbSubmitResult más abajo). Antes solo se guardaba el status
+            // "finished" acá: como el listener de "games" (handleLiveMatchUpdate)
+            // se entera de esto casi al instante, pero fbSubmitResult recién
+            // actualiza meta.pairings en una segunda escritura por separado,
+            // el rival (que no fue quien hizo la jugada) podía llegar a ver
+            // el popup de fin de partida ANTES de que el resultado apareciera
+            // en meta.pairings, y como updateTournamentMatchBar buscaba el
+            // resultado ahí, mostraba el aviso genérico "Partida terminada"
+            // en vez de decir quién ganó. Con el resultado ya en este mismo
+            // documento, el rival lo ve apenas llega este snapshot, sin
+            // depender de esa segunda escritura.
+            g.result = gameOverResult;
+          }
           tx.update(gameDocRef, g);
           writtenGame = g;
         });
@@ -6707,6 +6723,18 @@
           headline = "🤝 ¡Tablas!";
           detail = `${whiteName} y ${blackName} empataron la partida${suffix}.`;
           variant = myColor ? "draw" : null;
+        } else if (result === "wo-black") {
+          headline = "🏆 ¡Ganaron las Blancas!";
+          detail = `${blackName} no se presentó: ${whiteName} ganó por incomparecencia (W.O.)${suffix}.`;
+          variant = myColor === "w" ? "win" : myColor === "b" ? "loss" : null;
+          if (myColor === "w") detail += "\n¡Ganaste vos! 🎉";
+          if (myColor === "b") detail += "\nPerdiste esta partida.";
+        } else if (result === "wo-white") {
+          headline = "🏆 ¡Ganaron las Negras!";
+          detail = `${whiteName} no se presentó: ${blackName} ganó por incomparecencia (W.O.)${suffix}.`;
+          variant = myColor === "b" ? "win" : myColor === "w" ? "loss" : null;
+          if (myColor === "b") detail += "\n¡Ganaste vos! 🎉";
+          if (myColor === "w") detail += "\nPerdiste esta partida.";
         } else {
           return { text: "🏁 Partida de torneo terminada.", variant: null };
         }
@@ -6752,10 +6780,18 @@
           clearInterval(tournamentClockTimer);
           if (!tournamentResultShown) {
             tournamentResultShown = true;
-            const pairing = (lastTournamentState && lastTournamentState.pairings || []).find(
-              (p) => p.round === gameRow.round && p.board === gameRow.board
-            );
-            showTournamentResult(pairing ? pairing.result : "");
+            // Preferimos gameRow.result (viene en el mismo documento/snapshot
+            // que ya nos dice "finished", sin demora) y solo si por algún
+            // motivo no está (partidas viejas, WO declarado por otra vía)
+            // recurrimos al resultado guardado en meta.pairings.
+            let finalResult = gameRow.result;
+            if (!finalResult) {
+              const pairing = (lastTournamentState && lastTournamentState.pairings || []).find(
+                (p) => p.round === gameRow.round && p.board === gameRow.board
+              );
+              finalResult = pairing ? pairing.result : "";
+            }
+            showTournamentResult(finalResult);
           }
           return;
         }
