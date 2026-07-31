@@ -4169,6 +4169,15 @@
           (snap) => {
             statusEl.textContent = "✓ Conectado.";
             statusEl.classList.add("correct");
+            // --- INSTRUMENTACIÓN TEMPORAL: tamaño del doc raíz del torneo ---
+            // Sacar este bloque una vez diagnosticado el cuello de botella.
+            if (snap.exists) {
+              const __raw = snap.data();
+              const __bytes = JSON.stringify(__raw).length;
+              console.log(
+                `[perf] room snapshot ~${(__bytes / 1024).toFixed(1)}KB | pairings=${(__raw.pairings || []).length} players=${(__raw.players || []).length}`
+              );
+            }
             const state = normalizeTournamentState(snap.exists ? snap.data() : null);
             const previousStatus = lastKnownTournamentStatus_;
             lastKnownTournamentStatus_ = state.meta.status;
@@ -6383,8 +6392,15 @@
       let standingsSignature_ = null;
       function renderStandingsAndPlayers_(state, isAdmin, isReferee) {
         const standingsEl = document.getElementById("tournament-standings-list");
+        // --- INSTRUMENTACIÓN TEMPORAL: costo de rankPlayers_ + stringify ---
+        const __t0 = performance.now();
         const ranked2 = rankPlayers_(state.players, state.pairings);
+        const __t1 = performance.now();
         const newStandingsSignature = JSON.stringify([ranked2, isReferee]);
+        const __t2 = performance.now();
+        console.log(
+          `[perf] standings rank=${(__t1 - __t0).toFixed(2)}ms stringify=${(__t2 - __t1).toFixed(2)}ms | pairings=${state.pairings.length}`
+        );
         if (standingsSignature_ !== newStandingsSignature) {
           standingsSignature_ = newStandingsSignature;
           let rows = ranked2
@@ -6480,7 +6496,13 @@
         // listener solo se activa cuando termina una partida o cambia la
         // ronda. Igual dejamos la comparación por firma para no rehacer el
         // HTML si nada de lo que se muestra acá cambió realmente.
+        // --- INSTRUMENTACIÓN TEMPORAL: costo del stringify sobre el historial completo ---
+        const __t0 = performance.now();
         const publicSignature = JSON.stringify([state.players, state.pairings, state.meta]);
+        const __t1 = performance.now();
+        console.log(
+          `[perf] renderPublicScreen stringify=${(__t1 - __t0).toFixed(2)}ms | pairings=${state.pairings.length} players=${state.players.length}`
+        );
         if (contentEl.dataset.sig === publicSignature) return;
         contentEl.dataset.sig = publicSignature;
 
