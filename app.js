@@ -714,13 +714,76 @@
       }
 
       function renderCapturedMaterial() {
-        const history = game.history({ verbose: true });
-        const capturedW = [];
-        const capturedB = [];
-        // Con chess.js podemos inferir capturas o usar un conteo estándar, 
-        // simplificamos mostrando material tomado si estuviera disponible o vacío.
-        document.getElementById("captured-w").textContent = "";
-        document.getElementById("captured-b").textContent = "";
+        const capturedWEl = document.getElementById("captured-w");
+        const capturedBEl = document.getElementById("captured-b");
+        if (!capturedWEl && !capturedBEl) return; // esta pantalla no tiene el panel (ej. análisis)
+
+        // IMPORTANTE: no usamos game.history() para esto. En una partida de
+        // torneo, cada actualización llega como un FEN nuevo y se carga con
+        // game.load(gameRow.fen) (ver handleLiveMatchUpdate / enterTournamentMatch),
+        // y chess.js BORRA el historial de jugadas al hacer .load(). Si esta
+        // función dependiera del historial, en modo torneo siempre mostraría
+        // 0 capturas. En cambio, calculamos el material comparando la
+        // posición actual contra el set inicial de piezas: eso funciona
+        // igual sin importar cómo se llegó a esa posición (jugada a jugada
+        // o cargando un FEN), o sea, en los tres modos (IA, pasar y jugar,
+        // torneo).
+        const vals = { p: 1, n: 3, b: 3, r: 5, q: 9 };
+        const order = ["q", "r", "b", "n", "p"];
+        const STANDARD = { p: 8, n: 2, b: 2, r: 2, q: 1 };
+
+        const board = game.board();
+        const counts = { w: { p: 0, n: 0, b: 0, r: 0, q: 0 }, b: { p: 0, n: 0, b: 0, r: 0, q: 0 } };
+        let whiteValue = 0;
+        let blackValue = 0;
+        for (let r = 0; r < 8; r++) {
+          for (let c = 0; c < 8; c++) {
+            const p = board[r][c];
+            if (!p || p.type === "k") continue;
+            counts[p.color][p.type]++;
+            if (p.color === "w") whiteValue += vals[p.type];
+            else blackValue += vals[p.type];
+          }
+        }
+
+        function missingFor(color) {
+          // Damas "de más" (coronación) no cuentan como pérdida de peón:
+          // ese peón no fue capturado, se transformó.
+          const extraQueens = Math.max(0, counts[color].q - STANDARD.q);
+          const missing = {};
+          for (const t of order) missing[t] = Math.max(0, STANDARD[t] - counts[color][t]);
+          missing.p = Math.max(0, missing.p - extraQueens);
+          return missing;
+        }
+
+        const missingWhite = missingFor("w"); // piezas blancas ausentes → las capturaron las negras
+        const missingBlack = missingFor("b"); // piezas negras ausentes → las capturaron las blancas
+        const diff = whiteValue - blackValue; // ventaja de material actual (+ = ventaja blancas)
+
+        function glyphsHtml(missing, pieceColor) {
+          let html = "";
+          for (const t of order) {
+            for (let i = 0; i < missing[t]; i++) {
+              html += `<span style="font-size:16px; line-height:1; color:var(--text); opacity:0.85;">${PIECES[pieceColor + t.toUpperCase()]}</span>`;
+            }
+          }
+          return html;
+        }
+
+        function advantageHtml(amount) {
+          return amount > 0
+            ? `<span style="font-size:12px; font-weight:600; color:var(--text); margin-left:4px;">+${amount}</span>`
+            : "";
+        }
+
+        // Piezas negras capturadas se muestran del lado de las blancas (lo
+        // que ganaron), y viceversa.
+        if (capturedWEl) {
+          capturedWEl.innerHTML = glyphsHtml(missingBlack, "b") + advantageHtml(diff > 0 ? diff : 0);
+        }
+        if (capturedBEl) {
+          capturedBEl.innerHTML = glyphsHtml(missingWhite, "w") + advantageHtml(diff < 0 ? -diff : 0);
+        }
       }
 
       function updateEvalBar() {
@@ -4156,6 +4219,38 @@
         return getTournamentStateOnce();
       }
 
+      // Autoriza TODAS las inscripciones pendientes de una sola vez (misma
+      // transacción), para que el admin no tenga que aprobar una por una.
+      async function fbApproveAllRegistrations() {
+        assertAdmin();
+        await fbDb.runTransaction(async (tx) => {
+          const snap = await tx.get(fbRoomRef);
+          if (!snap.exists) throw new Error("Todavía no creaste un torneo");
+          const data = snap.data();
+          const players = data.players || [];
+          const pending = players.filter((p) => p.status === "pending");
+          if (pending.length === 0) throw new Error("No hay inscripciones pendientes");
+          const updated = players.map((p) => (p.status === "pending" ? { ...p, status: "active" } : p));
+          tx.update(fbRoomRef, { players: updated });
+        });
+        return getTournamentStateOnce();
+      }
+
+      // Rechaza (borra) TODAS las inscripciones pendientes de una sola vez.
+      async function fbRejectAllRegistrations() {
+        assertAdmin();
+        await fbDb.runTransaction(async (tx) => {
+          const snap = await tx.get(fbRoomRef);
+          if (!snap.exists) throw new Error("Todavía no creaste un torneo");
+          const data = snap.data();
+          const players = data.players || [];
+          const pending = players.filter((p) => p.status === "pending");
+          if (pending.length === 0) throw new Error("No hay inscripciones pendientes");
+          tx.update(fbRoomRef, { players: players.filter((p) => p.status !== "pending") });
+        });
+        return getTournamentStateOnce();
+      }
+
       // Edita solo los datos personales (nombre/email) de un jugador. No toca
       // puntos, partidas jugadas ("played"), byes ni colorBalance, para no
       // afectar su historial de partidas. También actualiza el nombre/email
@@ -6250,6 +6345,52 @@
         const playersSignature = JSON.stringify([state.players, tournamentEditingPlayerId]);
         if (listEl.dataset.sig === playersSignature) return;
         listEl.dataset.sig = playersSignature;
+
+        // Barra "Autorizar todos / Rechazar todos": se crea una sola vez y
+        // se inserta arriba de la lista, justo antes de listEl. Solo se
+        // muestra si hay inscripciones pendientes y el usuario es admin.
+        const pendingIds = state.players.filter((p) => (p.status || "active") === "pending").map((p) => p.id);
+        let bulkBar = document.getElementById("tournament-pending-bulk-actions");
+        if (!bulkBar) {
+          bulkBar = document.createElement("div");
+          bulkBar.id = "tournament-pending-bulk-actions";
+          bulkBar.style.cssText = "display:flex; gap:8px; margin-bottom:10px; flex-wrap:wrap;";
+          listEl.parentNode.insertBefore(bulkBar, listEl);
+        }
+        if (isAdmin && pendingIds.length > 0) {
+          bulkBar.style.display = "flex";
+          bulkBar.innerHTML = `
+            <button class="btn primary" id="tournament-approve-all-btn">✅ Autorizar todos (${pendingIds.length})</button>
+            <button class="btn danger" id="tournament-reject-all-btn">🚫 Rechazar todos (${pendingIds.length})</button>
+          `;
+          const approveAllBtn = document.getElementById("tournament-approve-all-btn");
+          if (approveAllBtn) {
+            approveAllBtn.addEventListener("click", async () => {
+              if (!confirm(`¿Autorizar las ${pendingIds.length} inscripciones pendientes?`)) return;
+              try {
+                await fbApproveAllRegistrations();
+                toast("✅ Todas las inscripciones fueron autorizadas");
+              } catch (err) {
+                toast("❌ " + err.message);
+              }
+            });
+          }
+          const rejectAllBtn = document.getElementById("tournament-reject-all-btn");
+          if (rejectAllBtn) {
+            rejectAllBtn.addEventListener("click", async () => {
+              if (!confirm(`¿Rechazar las ${pendingIds.length} inscripciones pendientes? Esta acción no se puede deshacer.`)) return;
+              try {
+                await fbRejectAllRegistrations();
+                toast("🚫 Todas las inscripciones pendientes fueron rechazadas");
+              } catch (err) {
+                toast("❌ " + err.message);
+              }
+            });
+          }
+        } else {
+          bulkBar.style.display = "none";
+          bulkBar.innerHTML = "";
+        }
 
         listEl.innerHTML = state.players
           .map((p) => {
