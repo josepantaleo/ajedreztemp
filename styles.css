@@ -19,6 +19,14 @@
         box-sizing: border-box;
       }
 
+      html {
+        overflow-x: hidden;
+      }
+
+      body {
+        overflow-x: hidden;
+      }
+
       body {
         margin: 0;
         font-family: Inter, system-ui, Arial, sans-serif;
@@ -1943,20 +1951,116 @@
         .sidebar {
           position: static;
           height: auto;
-          padding: 12px;
+          padding: 10px 10px 6px;
         }
+        /* La marca (logo + texto largo de la escuela) ocupa mucho alto en
+           mobile; se achica y se muestra en una fila compacta en vez de
+           la tarjeta grande pensada para el sidebar de escritorio. */
+        .brand {
+          margin: -2px -2px 10px;
+          padding: 10px;
+          gap: 10px;
+        }
+        .brand .logo {
+          flex: 0 0 40px;
+          width: 40px;
+          height: 40px;
+          font-size: 2.1rem;
+          border-radius: 12px;
+        }
+        .brand h1 {
+          font-size: 0.92rem;
+        }
+        .brand h5,
+        .brand span {
+          display: none;
+        }
+        /* Nav como barra de pestañas pegada arriba: siempre a mano
+           mientras se scrollea la página, con scroll horizontal prolijo
+           (sin barra de scroll visible) y botones que no se cortan. */
         .nav {
           display: flex;
-          overflow: auto;
+          gap: 6px;
+          overflow-x: auto;
+          -webkit-overflow-scrolling: touch;
+          scrollbar-width: none;
+          position: sticky;
+          top: 0;
+          z-index: 30;
+          margin: 0 -10px;
+          padding: 6px 10px;
+          background: rgba(8, 18, 32, 0.96);
+          backdrop-filter: blur(10px);
+        }
+        .light-mode .nav {
+          background: rgba(255, 255, 255, 0.96);
+        }
+        .nav::-webkit-scrollbar {
+          display: none;
+        }
+        .nav button {
+          flex: 0 0 auto;
+          white-space: nowrap;
+          padding: 10px 14px;
+          font-size: 0.88rem;
         }
         .profile-mini {
           display: none;
         }
         .main {
-          padding: 15px;
+          padding: 14px;
         }
         .game-layout {
           display: block;
+        }
+        /* Encabezado de cada página: apilado y centrado, con el botón
+           principal ocupando todo el ancho para que sea fácil de tocar. */
+        .topbar {
+          flex-direction: column;
+          align-items: stretch;
+          gap: 12px;
+        }
+        .topbar h2 {
+          font-size: 1.25rem;
+        }
+        .top-actions {
+          flex-direction: column;
+        }
+        .top-actions .btn {
+          width: 100%;
+        }
+        /* Tablas anchas (historial, posiciones del torneo): scroll
+           horizontal propio en vez de romper el layout de la página. */
+        #history-card .table,
+        #tournament-standings-list {
+          display: block;
+          overflow-x: auto;
+          -webkit-overflow-scrolling: touch;
+        }
+        .standings-table {
+          min-width: 560px;
+        }
+        #history-card .table {
+          min-width: 480px;
+        }
+      }
+
+      @media (max-width: 560px) {
+        .learning-path {
+          grid-template-columns: 1fr;
+        }
+      }
+
+      @media (max-width: 420px) {
+        .dashboard-grid {
+          grid-template-columns: 1fr;
+        }
+        .chat-input-row .btn {
+          min-width: 0;
+          padding: 10px 12px;
+        }
+        .chat-input-counter {
+          display: none;
         }
       }
 
