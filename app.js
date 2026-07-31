@@ -3842,6 +3842,15 @@
       let tournamentUnsub = null;
       let tournamentBusy = false;
       let lastTournamentState = null;
+      // Último meta.status conocido (antes de procesar el snapshot actual).
+      // Sirve para detectar la TRANSICIÓN a "finished" (se finalizó el
+      // torneo) o "setup" (se reinició), y en ese momento sacar a cualquier
+      // jugador/espectador que tenga una mesa abierta (ver subscribeTournament
+      // y closeActiveMatchOnTournamentChange_). Arranca en null a propósito:
+      // así, si alguien se conecta y el torneo YA estaba finalizado de antes,
+      // no se dispara el cierre forzado (no es una transición, es el estado
+      // con el que se encontró al entrar).
+      let lastKnownTournamentStatus_ = null;
       let tournamentEditingPlayerId = null; // id del jugador cuya fila está en modo edición en el panel de árbitro
       let currentUser = null; // { email, displayName } una vez logueado con Google
 
@@ -4064,6 +4073,19 @@
         );
       }
 
+      // Si hay una mesa (partida de torneo) abierta en pantalla cuando el
+      // torneo finaliza o se reinicia, la cierra: avisa por qué y vuelve a
+      // la pantalla del torneo (exitTournamentMatch), en vez de dejar a
+      // alguien mirando/jugando una mesa que ya no tiene sentido. Esto corre
+      // en el navegador de cada persona conectada (jugadores, espectadores,
+      // admin, árbitro), así que en la práctica "cierra todas las mesas".
+      function closeActiveMatchOnTournamentChange_(reason) {
+        if (!tournamentMatchActive) return;
+        closeAlert_();
+        toast(reason);
+        exitTournamentMatch();
+      }
+
       function subscribeTournament() {
         if (tournamentUnsub) {
           tournamentUnsub();
@@ -4075,12 +4097,21 @@
             statusEl.textContent = "✓ Conectado.";
             statusEl.classList.add("correct");
             const state = normalizeTournamentState(snap.exists ? snap.data() : null);
+            const previousStatus = lastKnownTournamentStatus_;
+            lastKnownTournamentStatus_ = state.meta.status;
             lastTournamentState = state;
             const hasActiveOrFinishedRound = state.meta.status === "active" || state.meta.status === "finished";
             subscribeRoundGames(hasActiveOrFinishedRound ? state.meta.round : null);
             renderTournamentState(state);
             if (typeof renderPublicScreen === "function") renderPublicScreen(state);
             handleLiveMatchUpdate(state);
+            if (previousStatus !== null && previousStatus !== state.meta.status) {
+              if (state.meta.status === "finished") {
+                closeActiveMatchOnTournamentChange_("🏁 El administrador finalizó el torneo.");
+              } else if (state.meta.status === "setup") {
+                closeActiveMatchOnTournamentChange_("🔄 El administrador reinició el torneo.");
+              }
+            }
           },
           (err) => {
             statusEl.textContent = "❌ No se pudo conectar: " + err.message;
