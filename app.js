@@ -917,6 +917,30 @@
         });
       }
 
+      // Actualiza SOLO las clases "selected" y "hint" de las casillas que ya
+      // existen en el DOM, sin reconstruir el tablero entero (eso es lo que
+      // hace render(), incluyendo recrear las 64 casillas y sus listeners).
+      // Se usa en los momentos en que lo único que cambia es qué pieza está
+      // seleccionada / qué jugadas se resaltan (arrancar un arrastre, click
+      // de selección) — no cuando cambia la posición real. Mucho más
+      // rápido, y no destruye la pieza que se esté arrastrando.
+      function updateSelectionHighlights() {
+        const board = document.getElementById("board");
+        if (!board) return;
+        board.querySelectorAll(".square.selected").forEach((sq) => sq.classList.remove("selected"));
+        board.querySelectorAll(".square.hint").forEach((sq) => sq.classList.remove("hint"));
+        if (selected) {
+          const originEl = board.querySelector(`.square[data-square="${selected}"]`);
+          if (originEl) originEl.classList.add("selected");
+        }
+        if (showLegalMoves) {
+          for (const sq of validMoves) {
+            const el = board.querySelector(`.square[data-square="${sq}"]`);
+            if (el) el.classList.add("hint");
+          }
+        }
+      }
+
       function onPieceDragMove(e) {
         if (!dragCtx) return;
         const dx = e.clientX - dragCtx.startX;
@@ -930,17 +954,19 @@
           const moves = game.moves({ square: dragCtx.from, verbose: true });
           validMoves = moves.map((m) => m.to);
           SoundFX.select();
-          render();
-
-          const sqEl = document.querySelector(`.square[data-square="${dragCtx.from}"]`);
-          const freshPieceEl = sqEl ? sqEl.querySelector(".piece") : null;
-          if (freshPieceEl) {
-            dragCtx.pieceEl = freshPieceEl;
-            freshPieceEl.classList.add("dragging");
-            freshPieceEl.style.width = dragCtx.width + "px";
-            freshPieceEl.style.height = dragCtx.height + "px";
-            sqEl.classList.add("drag-origin");
-          }
+          // Antes acá se llamaba a render() completo (reconstruye las 64
+          // casillas y todos sus listeners) solo para pintar el resaltado
+          // de jugadas posibles, justo en el instante más sensible a la
+          // latencia. Encima destruía la pieza que se estaba arrastrando,
+          // obligando a "recuperarla" del DOM reconstruido. Ahora solo
+          // tocamos las clases CSS que cambiaron, y seguimos arrastrando la
+          // MISMA pieza que ya teníamos agarrada.
+          updateSelectionHighlights();
+          const sqEl = dragCtx.pieceEl.closest(".square");
+          dragCtx.pieceEl.classList.add("dragging");
+          dragCtx.pieceEl.style.width = dragCtx.width + "px";
+          dragCtx.pieceEl.style.height = dragCtx.height + "px";
+          if (sqEl) sqEl.classList.add("drag-origin");
         }
 
         if (!dragCtx.pieceEl) return;
@@ -1079,7 +1105,7 @@
         if (selected === sqName) {
           selected = null;
           validMoves = [];
-          render();
+          updateSelectionHighlights();
           return;
         }
 
@@ -1116,7 +1142,7 @@
           selected = null;
           validMoves = [];
         }
-        render();
+        updateSelectionHighlights();
       }
 
       function checkGameOver() {
