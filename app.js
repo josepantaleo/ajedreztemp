@@ -23,6 +23,163 @@
 
       const FILES = ["a", "b", "c", "d", "e", "f", "g", "h"];
 
+      // =========================
+      // AVATARES ANIMADOS (mascotes)
+      // =========================
+      // Cada mascota es una pieza de ajedrez "con vida": emoji + una
+      // animación CSS distinta + un color propio. No dependen de imágenes
+      // externas, así que funcionan offline y no pesan nada.
+      const AVATAR_MASCOTS = {
+        knight:  { emoji: "♞", label: "Caballo saltarín", anim: "avatar-bounce",  color1: "#7c3aed", color2: "#a78bfa" },
+        pawn:    { emoji: "♟", label: "Peón valiente",    anim: "avatar-wiggle",  color1: "#2563eb", color2: "#60a5fa" },
+        rook:    { emoji: "♜", label: "Torre firme",      anim: "avatar-pulse",   color1: "#059669", color2: "#34d399" },
+        bishop:  { emoji: "♝", label: "Alfil astuto",     anim: "avatar-tilt",    color1: "#d97706", color2: "#fbbf24" },
+        queen:   { emoji: "♛", label: "Dama veloz",       anim: "avatar-spin",    color1: "#db2777", color2: "#f472b6" },
+        king:    { emoji: "♚", label: "Rey sabio",        anim: "avatar-nod",     color1: "#dc2626", color2: "#f87171" },
+      };
+
+      let avatarStylesInjected = false;
+      function injectAvatarStyles_() {
+        if (avatarStylesInjected) return;
+        avatarStylesInjected = true;
+        const style = document.createElement("style");
+        style.textContent = `
+          .avatar-bubble {
+            display: inline-flex; align-items: center; justify-content: center;
+            width: 34px; height: 34px; border-radius: 50%;
+            font-size: 18px; line-height: 1; cursor: pointer;
+            box-shadow: 0 2px 6px rgba(0,0,0,.25);
+            border: 2px solid rgba(255,255,255,.6);
+            vertical-align: middle; margin-right: 8px;
+            user-select: none; flex-shrink: 0;
+          }
+          .avatar-bubble.large { width: 54px; height: 54px; font-size: 28px; }
+          .avatar-bubble.static { animation: none !important; }
+          @keyframes avatar-bounce { 0%,100%{transform:translateY(0)} 50%{transform:translateY(-4px)} }
+          @keyframes avatar-wiggle { 0%,100%{transform:rotate(-8deg)} 50%{transform:rotate(8deg)} }
+          @keyframes avatar-pulse  { 0%,100%{transform:scale(1)} 50%{transform:scale(1.12)} }
+          @keyframes avatar-tilt   { 0%,100%{transform:rotate(0deg)} 50%{transform:rotate(14deg)} }
+          @keyframes avatar-spin   { 0%{transform:rotate(0deg)} 100%{transform:rotate(360deg)} }
+          @keyframes avatar-nod    { 0%,100%{transform:translateY(0) rotate(0)} 50%{transform:translateY(2px) rotate(-4deg)} }
+          .avatar-bounce { animation: avatar-bounce 1.1s ease-in-out infinite; }
+          .avatar-wiggle { animation: avatar-wiggle 1.4s ease-in-out infinite; }
+          .avatar-pulse  { animation: avatar-pulse 1.3s ease-in-out infinite; }
+          .avatar-tilt   { animation: avatar-tilt 1.6s ease-in-out infinite; }
+          .avatar-spin   { animation: avatar-spin 3.2s linear infinite; }
+          .avatar-nod    { animation: avatar-nod 1.2s ease-in-out infinite; }
+          #avatar-picker-backdrop {
+            position: fixed; inset: 0; background: rgba(0,0,0,.55);
+            display: flex; align-items: center; justify-content: center;
+            z-index: 9999;
+          }
+          #avatar-picker-box {
+            background: #1e1e2e; color: #fff; padding: 20px; border-radius: 14px;
+            max-width: 320px; width: 90%; text-align: center;
+            box-shadow: 0 10px 30px rgba(0,0,0,.4);
+          }
+          #avatar-picker-box h3 { margin: 0 0 12px; font-size: 16px; }
+          #avatar-picker-grid {
+            display: grid; grid-template-columns: repeat(3, 1fr); gap: 12px;
+            margin-bottom: 14px;
+          }
+          .avatar-option {
+            display: flex; flex-direction: column; align-items: center; gap: 6px;
+            padding: 8px 4px; border-radius: 10px; cursor: pointer;
+            border: 2px solid transparent;
+          }
+          .avatar-option.selected { border-color: #fff; background: rgba(255,255,255,.08); }
+          .avatar-option span.opt-label { font-size: 11px; opacity: .85; }
+          #avatar-picker-close {
+            background: #444; color: #fff; border: none; border-radius: 8px;
+            padding: 8px 16px; cursor: pointer; font-size: 13px;
+          }
+        `;
+        document.head.appendChild(style);
+      }
+
+      function avatarBubbleHTML_(id, opts = {}) {
+        const m = AVATAR_MASCOTS[id] || AVATAR_MASCOTS.knight;
+        const size = opts.large ? " large" : "";
+        const still = opts.static ? " static" : "";
+        const grad = `linear-gradient(135deg, ${m.color1}, ${m.color2})`;
+        return `<span class="avatar-bubble${size}${still} ${m.anim}" style="background:${grad}" title="${escapeHtml_(m.label)}">${m.emoji}</span>`;
+      }
+
+      // Dibuja/actualiza el avatar del perfil (junto al nombre) y lo hace
+      // clickeable para abrir el selector de mascotas.
+      function renderMiniAvatar() {
+        injectAvatarStyles_();
+        const nameEl = document.getElementById("mini-name");
+        if (!nameEl) return;
+        let holder = document.getElementById("mini-avatar");
+        if (!holder) {
+          holder = document.createElement("span");
+          holder.id = "mini-avatar";
+          nameEl.parentNode.insertBefore(holder, nameEl);
+        }
+        holder.innerHTML = avatarBubbleHTML_(state.avatar || "knight");
+        holder.onclick = openAvatarPicker;
+        holder.querySelector(".avatar-bubble").onclick = openAvatarPicker;
+      }
+
+      // Dibuja el mismo mascote del jugador junto a su reloj en el
+      // tablero (partida local o de torneo), para que se vea "vivo"
+      // mientras juega. El rival muestra una mascota fija en gris.
+      function renderBoardAvatars_() {
+        injectAvatarStyles_();
+        const wEl = document.getElementById("clock-w");
+        const bEl = document.getElementById("clock-b");
+        [wEl, bEl].forEach((el) => {
+          if (!el) return;
+          let av = el.querySelector(".avatar-bubble");
+          if (!av) {
+            el.insertAdjacentHTML("afterbegin", avatarBubbleHTML_(state.avatar || "knight"));
+          }
+        });
+      }
+
+      function openAvatarPicker() {
+        injectAvatarStyles_();
+        closeAvatarPicker_();
+        const backdrop = document.createElement("div");
+        backdrop.id = "avatar-picker-backdrop";
+        const current = state.avatar || "knight";
+        const options = Object.keys(AVATAR_MASCOTS).map((id) => {
+          const sel = id === current ? " selected" : "";
+          return `
+            <div class="avatar-option${sel}" data-avatar="${id}">
+              ${avatarBubbleHTML_(id, { large: true })}
+              <span class="opt-label">${escapeHtml_(AVATAR_MASCOTS[id].label)}</span>
+            </div>`;
+        }).join("");
+        backdrop.innerHTML = `
+          <div id="avatar-picker-box">
+            <h3>🐴 Elegí tu mascota</h3>
+            <div id="avatar-picker-grid">${options}</div>
+            <button id="avatar-picker-close">Cerrar</button>
+          </div>`;
+        document.body.appendChild(backdrop);
+        backdrop.addEventListener("click", (e) => {
+          if (e.target === backdrop) closeAvatarPicker_();
+        });
+        backdrop.querySelectorAll(".avatar-option").forEach((opt) => {
+          opt.addEventListener("click", () => {
+            state.avatar = opt.dataset.avatar;
+            save();
+            renderMiniAvatar();
+            renderBoardAvatars_();
+            closeAvatarPicker_();
+            toast("✓ Mascota actualizada");
+          });
+        });
+        document.getElementById("avatar-picker-close").addEventListener("click", closeAvatarPicker_);
+      }
+
+      function closeAvatarPicker_() {
+        const el = document.getElementById("avatar-picker-backdrop");
+        if (el) el.remove();
+      }
+
       const DEFAULT_STATE = {
         name: "Alumno",
         course: "",
@@ -34,6 +191,7 @@
         puzzles: 0,
         history: [],
         savedGames: [],
+        avatar: "knight",
       };
 
       let state = loadState();
@@ -1518,6 +1676,7 @@
         if (tournamentMatchActive) return;
         const w = document.getElementById("clock-w");
         const b = document.getElementById("clock-b");
+        renderBoardAvatars_();
         const wTime = w.querySelector(".clock-time");
         const bTime = b.querySelector(".clock-time");
         (wTime || w).textContent = formatTime(clock.w);
@@ -1536,6 +1695,7 @@
         const level = Math.floor(state.xp / 1000) + 1;
         const progress = state.xp % 1000;
         document.getElementById("mini-name").textContent = state.name || "Alumno";
+        renderMiniAvatar();
         document.getElementById("mini-level").textContent = `Nivel ${level} · ${levelLabel(level)}`;
         document.getElementById("mini-xp").style.width = (progress / 10) + "%";
         document.getElementById("mini-xp-text").textContent = `${progress} / 1000 XP`;
