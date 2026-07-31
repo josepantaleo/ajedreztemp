@@ -5033,6 +5033,7 @@
         // dudas a que nunca sea posterior al "ahora" real.
         const effectiveMoveAt = Math.min(clientMoveAt || Date.now(), Date.now());
         const gameDocRef = gamesCollectionRef.doc(gameDocId_(round, board));
+        let writtenGame = null;
         await fbDb.runTransaction(async (tx) => {
           const snap = await tx.get(gameDocRef);
           if (!snap.exists) throw new Error("No se encontró esa partida");
@@ -5080,15 +5081,26 @@
           if (lastTo) g.lastTo = lastTo;
           if (gameOverResult) g.status = "finished";
           tx.update(gameDocRef, g);
+          writtenGame = g;
         });
-        // fbSubmitResult (cuando hay resultado) y getTournamentStateOnce
-        // (cuando no) ya no traen el documento de la partida, así que lo
-        // adjuntamos acá como "gameRow" para que quienes llaman a
-        // fbMakeMove (syncTournamentMove, resign, tablas, claimTournamentTimeout)
-        // no tengan que hacer una lectura aparte.
-        const state = gameOverResult ? await fbSubmitResult(round, board, gameOverResult) : await getTournamentStateOnce();
-        const gSnap = await gameDocRef.get();
-        state.gameRow = gSnap.exists ? gSnap.data() : null;
+        // ANTES: acá se hacían dos lecturas de red MÁS, en serie, después de
+        // que la transacción ya había confirmado la jugada: getTournamentStateOnce()
+        // (traía todo el documento del torneo, aunque en una jugada normal
+        // ese dato ni se usa) y gameDocRef.get() (releía el documento de la
+        // partida que un par de líneas arriba nosotros mismos acabamos de
+        // escribir). Eso eran 3-4 idas y vueltas al servidor por cada
+        // jugada. Como ya sabemos exactamente qué quedó guardado
+        // (writtenGame, arriba), lo usamos directo: en una jugada normal
+        // (sin jaque mate/tablas/rendición) no hace falta ninguna lectura
+        // más y la jugada se siente sincronizada de inmediato. Solo cuando
+        // hay un resultado (fin de partida) seguimos necesitando
+        // fbSubmitResult (actualiza puntos y emparejamientos), pero incluso
+        // ahí nos ahorramos la relectura final del documento de la partida.
+        if (!gameOverResult) {
+          return { gameRow: writtenGame };
+        }
+        const state = await fbSubmitResult(round, board, gameOverResult);
+        state.gameRow = writtenGame;
         return state;
       }
 
