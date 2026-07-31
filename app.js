@@ -9,6 +9,13 @@
         levelLabel,
       } from "./utils.js";
 
+      // Instrumentación temporal de rendimiento (mediciones con
+      // performance.now/JSON.stringify y sus console.log asociados), usada
+      // en su momento para diagnosticar cuellos de botella en el torneo.
+      // Queda apagada por defecto para no gastar CPU en la ruta crítica en
+      // producción; para reactivarla al depurar, poner esto en true.
+      const PERF_DEBUG = false;
+
       const PIECES = {
         wK: "♔", wQ: "♕", wR: "♖", wB: "♗", wN: "♘", wP: "♙",
         bK: "♚", bQ: "♛", bR: "♜", bB: "♝", bN: "♞", bP: "♟"
@@ -4170,8 +4177,10 @@
             statusEl.textContent = "✓ Conectado.";
             statusEl.classList.add("correct");
             // --- INSTRUMENTACIÓN TEMPORAL: tamaño del doc raíz del torneo ---
-            // Sacar este bloque una vez diagnosticado el cuello de botella.
-            if (snap.exists) {
+            // Detrás de PERF_DEBUG: el JSON.stringify sobre el doc completo
+            // (que puede ser grande, con cientos de pairings) solo corre si
+            // se activa el flag a mano para depurar.
+            if (PERF_DEBUG && snap.exists) {
               const __raw = snap.data();
               const __bytes = JSON.stringify(__raw).length;
               console.log(
@@ -5388,7 +5397,28 @@
 
       // Ordena jugadores por puntos y, en caso de empate, por Buchholz
       // (suma de los puntos de todos los rivales que enfrentó cada uno).
+      // Caché por referencia de rankPlayers_: mientras el snapshot del
+      // torneo no cambie, normalizeTournamentState reutiliza los mismos
+      // arrays "players" y "pairings" en cada re-render (renderTournamentState,
+      // renderStandingsAndPlayers_ y renderPublicScreen llaman a rankPlayers_
+      // por separado con esos mismos arrays). Antes eso recalculaba puntos,
+      // Buchholz y V-E-D de todos los jugadores hasta 3 veces por cada
+      // jugada, aunque nada del torneo hubiera cambiado. Si players y
+      // pairings son las MISMAS referencias que la última vez, devolvemos el
+      // resultado ya calculado en vez de recorrer todo de nuevo; en cuanto
+      // cambie cualquiera de las dos (llega un snapshot nuevo con arrays
+      // nuevos), se recalcula como antes.
+      let _rankPlayersCache_ = { players: null, pairings: null, result: null };
       function rankPlayers_(players, pairings) {
+        if (_rankPlayersCache_.players === players && _rankPlayersCache_.pairings === pairings) {
+          return _rankPlayersCache_.result;
+        }
+        const result = rankPlayersCompute_(players, pairings);
+        _rankPlayersCache_ = { players, pairings, result };
+        return result;
+      }
+
+      function rankPlayersCompute_(players, pairings) {
         const byId = {};
         players.forEach((p) => (byId[p.id] = p));
 
@@ -6215,19 +6245,38 @@
         const sortedPairings = currentRoundPairings.slice().sort((a, b) => a.board - b.board);
         const seenBoards = new Set();
 
+        // Índice round+board -> partida (antes: currentRoundGames.find(...)
+        // por cada mesa, O(mesas * partidas)). Se arma una sola vez por
+        // render y cada búsqueda pasa a ser O(1); el resultado (qué partida
+        // corresponde a cada mesa) es exactamente el mismo.
+        const gamesByRoundBoard_ = new Map();
+        currentRoundGames.forEach((g) => gamesByRoundBoard_.set(g.round + "_" + g.board, g));
+
+        // Índice mesa -> elemento DOM (antes: listEl.querySelector(...) por
+        // cada mesa, dos veces por render, cada una recorriendo el DOM). Se
+        // arma una sola vez recorriendo los hijos actuales y se va
+        // actualizando a medida que se crean filas nuevas, así las
+        // búsquedas de acá en adelante son O(1) por Map en vez de recorrer
+        // el DOM.
+        const rowsByBoard_ = new Map();
+        Array.from(listEl.children).forEach((el) => {
+          if (el.dataset && el.dataset.boardKey != null) rowsByBoard_.set(el.dataset.boardKey, el);
+        });
+
         sortedPairings.forEach((p) => {
           seenBoards.add(String(p.board));
           const isBye = p.blackId === "";
-          const game = isBye ? null : currentRoundGames.find((g) => g.round === p.round && g.board === p.board);
+          const game = isBye ? null : gamesByRoundBoard_.get(p.round + "_" + p.board) || null;
           const rowSignature = JSON.stringify([p, game, isAdmin, isReferee, myEmail]);
 
-          let row = listEl.querySelector(`.pairing-card[data-board-key="${p.board}"]`);
+          let row = rowsByBoard_.get(String(p.board));
           if (row && row.dataset.sig === rowSignature) return; // esta mesa no cambió: no se toca su DOM
 
           if (!row) {
             row = document.createElement("div");
             row.className = "pairing-card";
             row.dataset.boardKey = p.board;
+            rowsByBoard_.set(String(p.board), row);
             listEl.appendChild(row);
           }
           row.dataset.sig = rowSignature;
@@ -6377,7 +6426,7 @@
         // cambió); como la mayoría ya está en su lugar, esto casi siempre
         // es un no-op barato.
         sortedPairings.forEach((p, idx) => {
-          const row = listEl.querySelector(`.pairing-card[data-board-key="${p.board}"]`);
+          const row = rowsByBoard_.get(String(p.board));
           if (row && listEl.children[idx] !== row) listEl.insertBefore(row, listEl.children[idx] || null);
         });
 
@@ -6393,14 +6442,18 @@
       function renderStandingsAndPlayers_(state, isAdmin, isReferee) {
         const standingsEl = document.getElementById("tournament-standings-list");
         // --- INSTRUMENTACIÓN TEMPORAL: costo de rankPlayers_ + stringify ---
-        const __t0 = performance.now();
+        // Detrás de PERF_DEBUG: en producción no se llama a performance.now()
+        // ni se arma el string de log en cada render.
+        const __t0 = PERF_DEBUG ? performance.now() : 0;
         const ranked2 = rankPlayers_(state.players, state.pairings);
-        const __t1 = performance.now();
+        const __t1 = PERF_DEBUG ? performance.now() : 0;
         const newStandingsSignature = JSON.stringify([ranked2, isReferee]);
-        const __t2 = performance.now();
-        console.log(
-          `[perf] standings rank=${(__t1 - __t0).toFixed(2)}ms stringify=${(__t2 - __t1).toFixed(2)}ms | pairings=${state.pairings.length}`
-        );
+        if (PERF_DEBUG) {
+          const __t2 = performance.now();
+          console.log(
+            `[perf] standings rank=${(__t1 - __t0).toFixed(2)}ms stringify=${(__t2 - __t1).toFixed(2)}ms | pairings=${state.pairings.length}`
+          );
+        }
         if (standingsSignature_ !== newStandingsSignature) {
           standingsSignature_ = newStandingsSignature;
           let rows = ranked2
@@ -6497,12 +6550,16 @@
         // ronda. Igual dejamos la comparación por firma para no rehacer el
         // HTML si nada de lo que se muestra acá cambió realmente.
         // --- INSTRUMENTACIÓN TEMPORAL: costo del stringify sobre el historial completo ---
-        const __t0 = performance.now();
+        // Detrás de PERF_DEBUG: en producción no se llama a performance.now()
+        // ni se arma el string de log en cada render.
+        const __t0 = PERF_DEBUG ? performance.now() : 0;
         const publicSignature = JSON.stringify([state.players, state.pairings, state.meta]);
-        const __t1 = performance.now();
-        console.log(
-          `[perf] renderPublicScreen stringify=${(__t1 - __t0).toFixed(2)}ms | pairings=${state.pairings.length} players=${state.players.length}`
-        );
+        if (PERF_DEBUG) {
+          const __t1 = performance.now();
+          console.log(
+            `[perf] renderPublicScreen stringify=${(__t1 - __t0).toFixed(2)}ms | pairings=${state.pairings.length} players=${state.players.length}`
+          );
+        }
         if (contentEl.dataset.sig === publicSignature) return;
         contentEl.dataset.sig = publicSignature;
 
