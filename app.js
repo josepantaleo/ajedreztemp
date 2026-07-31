@@ -644,6 +644,18 @@
       let tournamentResultShown = false; // evita mostrar el popup de fin de partida más de una vez
       let tournamentClockTimer = null; // interval del reloj visual de la partida de torneo abierta
       let tournamentCurrentGameRow = null; // última fila de "games" conocida para la partida abierta
+
+      // --- Chat de partida (mensajes entre los dos jugadores de una mesa) ---
+      // Vive en una subcolección del documento de la partida
+      // (torneos/{room}/games/{round}_{board}/chat), no en el documento de
+      // la partida en sí: así un mensaje de chat no compite con las
+      // escrituras de cada jugada (mismo motivo por el que cada mesa ya
+      // tiene su propio documento, ver el comentario junto a
+      // gamesCollectionRef más arriba).
+      let matchChatUnsub = null;
+      let matchChatMessages = [];
+      let matchChatPanelOpen = false;
+      let matchChatUnreadCount = 0;
       let tournamentTimeoutClaimBusy = false; // evita reclamar la bandera caída más de una vez a la vez
 
       function animateMoveTransition(board, anim, movedPieceEl, capturedSquareEl) {
@@ -4062,6 +4074,136 @@
       function gameDocId_(round, board) {
         return round + "_" + board;
       }
+
+      function matchChatCollectionRef_(round, board) {
+        return gamesCollectionRef.doc(gameDocId_(round, board)).collection("chat");
+      }
+
+      // Suscribe al chat de la mesa (round, board) actualmente abierta.
+      // Se guardan como mucho los últimos 200 mensajes en memoria (más que
+      // suficiente para una partida) para no dejar crecer el DOM sin límite
+      // en partidas muy charlatanas.
+      function subscribeMatchChat(round, board) {
+        unsubscribeMatchChat();
+        matchChatMessages = [];
+        matchChatUnreadCount = 0;
+        matchChatPanelOpen = false;
+        renderMatchChat();
+        matchChatUnsub = matchChatCollectionRef_(round, board)
+          .orderBy("at", "asc")
+          .limitToLast(200)
+          .onSnapshot(
+            (qsnap) => {
+              const previousCount = matchChatMessages.length;
+              matchChatMessages = qsnap.docs.map((d) => d.data());
+              const newCount = matchChatMessages.length - previousCount;
+              if (newCount > 0 && !matchChatPanelOpen) {
+                matchChatUnreadCount += newCount;
+              }
+              renderMatchChat();
+            },
+            () => {
+              // Silencioso: si esto falla (por ejemplo, reglas de
+              // Firestore que todavía no incluyen la subcolección "chat"),
+              // el resto de la partida (tablero, reloj, resultado) sigue
+              // funcionando igual; el chat simplemente no carga.
+            }
+          );
+      }
+
+      function unsubscribeMatchChat() {
+        if (matchChatUnsub) {
+          matchChatUnsub();
+          matchChatUnsub = null;
+        }
+        matchChatMessages = [];
+        matchChatUnreadCount = 0;
+        matchChatPanelOpen = false;
+        const panelEl = document.getElementById("tournament-match-chat-panel");
+        if (panelEl) panelEl.style.display = "none";
+        const inputEl = document.getElementById("tournament-match-chat-input");
+        if (inputEl) inputEl.value = "";
+      }
+
+      function renderMatchChat() {
+        const wrapEl = document.getElementById("tournament-match-chat");
+        const listEl = document.getElementById("tournament-match-chat-messages");
+        const noteEl = document.getElementById("tournament-match-chat-note");
+        const unreadEl = document.getElementById("tournament-match-chat-unread");
+        const inputRow = document.querySelector("#tournament-match-chat-panel .chat-input-row");
+        if (!wrapEl || !listEl) return;
+
+        const myColor = tournamentMyColor();
+        const canChat = !!myColor;
+        wrapEl.style.display = tournamentMatchActive ? "" : "none";
+        if (inputRow) inputRow.style.display = canChat ? "" : "none";
+        if (noteEl) noteEl.textContent = canChat ? "" : "Como espectador podés leer el chat, pero no escribir.";
+
+        if (unreadEl) {
+          if (matchChatUnreadCount > 0) {
+            unreadEl.textContent = String(matchChatUnreadCount);
+            unreadEl.style.display = "";
+          } else {
+            unreadEl.style.display = "none";
+          }
+        }
+
+        if (!matchChatMessages.length) {
+          listEl.innerHTML = '<p class="chat-message-empty">Todavía no hay mensajes. ¡Saludá a tu rival!</p>';
+        } else {
+          const myEmail = currentUser ? currentUser.email : "";
+          listEl.innerHTML = matchChatMessages
+            .map((m) => {
+              const mine = myEmail && (m.senderEmail || "").toLowerCase() === myEmail;
+              const name = escapeHtml_(m.senderName || "Jugador");
+              const text = escapeHtml_(m.text || "");
+              return (
+                `<div class="chat-message${mine ? " mine" : ""}">` +
+                `<span class="chat-message-meta">${name}</span>${text}` +
+                `</div>`
+              );
+            })
+            .join("");
+          listEl.scrollTop = listEl.scrollHeight;
+        }
+      }
+
+      function toggleMatchChatPanel() {
+        matchChatPanelOpen = !matchChatPanelOpen;
+        const panelEl = document.getElementById("tournament-match-chat-panel");
+        if (panelEl) panelEl.style.display = matchChatPanelOpen ? "" : "none";
+        if (matchChatPanelOpen) {
+          matchChatUnreadCount = 0;
+          renderMatchChat();
+          const listEl = document.getElementById("tournament-match-chat-messages");
+          if (listEl) listEl.scrollTop = listEl.scrollHeight;
+          const inputEl = document.getElementById("tournament-match-chat-input");
+          if (inputEl) inputEl.focus();
+        }
+      }
+
+      async function sendMatchChatMessage() {
+        const inputEl = document.getElementById("tournament-match-chat-input");
+        if (!inputEl) return;
+        const text = inputEl.value.trim();
+        if (!text) return;
+        if (!tournamentMatchCtx || !currentUser) return;
+        const myColor = tournamentMyColor();
+        if (!myColor) return; // los espectadores pueden leer, no escribir
+        inputEl.value = "";
+        try {
+          await matchChatCollectionRef_(tournamentMatchCtx.round, tournamentMatchCtx.board).add({
+            text: text.slice(0, 300),
+            senderEmail: currentUser.email,
+            senderName: currentUser.displayName || currentUser.email,
+            senderColor: myColor,
+            at: Date.now(),
+          });
+        } catch (err) {
+          inputEl.value = text; // devolvemos el texto al input para no perder el mensaje
+          toast("❌ No se pudo enviar el mensaje: " + err.message);
+        }
+      }
       // Últimas partidas de la ronda actual (alimentado por
       // subscribeRoundGames), usado en vez de un inexistente "state.games".
       let lastRoundGames = [];
@@ -7410,6 +7552,8 @@
             }
           }
 
+          subscribeMatchChat(round, board);
+
           render();
           updateTournamentMatchBar(gameRow);
           requestAnimationFrame(sizeFullscreenBoard);
@@ -7426,6 +7570,7 @@
         clearInterval(tournamentClockTimer);
         tournamentClockTimer = null;
         tournamentCurrentGameRow = null;
+        unsubscribeMatchChat();
 
         document.getElementById("tournament-match-bar").style.display = "none";
         ["new-game", "undo", "resign", "copy-game"].forEach((id) => {
@@ -7562,6 +7707,17 @@
           showError(err);
         } finally {
           tournamentMatchBusy = false;
+        }
+      });
+
+      document.getElementById("tournament-match-chat-toggle-btn").addEventListener("click", toggleMatchChatPanel);
+
+      document.getElementById("tournament-match-chat-send-btn").addEventListener("click", sendMatchChatMessage);
+
+      document.getElementById("tournament-match-chat-input").addEventListener("keydown", (e) => {
+        if (e.key === "Enter") {
+          e.preventDefault();
+          sendMatchChatMessage();
         }
       });
 
