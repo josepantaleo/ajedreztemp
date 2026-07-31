@@ -6020,6 +6020,83 @@
         }
       }
 
+      // Antes, cada vez que se reconstruía la lista de mesas se volvían a
+      // enganchar listeners nuevos con listEl.querySelectorAll(...).forEach(...),
+      // uno por cada botón de cada tarjeta. Con varias partidas online en
+      // simultáneo eso significaba des-enganchar y re-enganchar decenas de
+      // listeners muchas veces por segundo. Ahora se engancha UNA sola vez
+      // (delegación de eventos sobre el contenedor) y sigue funcionando
+      // aunque las tarjetas de adentro se reemplacen.
+      let pairingsDelegationSetup_ = false;
+      function setupPairingsListDelegation_(listEl) {
+        if (pairingsDelegationSetup_) return;
+        pairingsDelegationSetup_ = true;
+
+        listEl.addEventListener("click", (e) => {
+          const playBtn = e.target.closest("button[data-play-round]");
+          if (playBtn) {
+            enterTournamentMatch(
+              Number(playBtn.dataset.playRound),
+              Number(playBtn.dataset.playBoard),
+              playBtn.dataset.white,
+              playBtn.dataset.black,
+              playBtn.dataset.whiteEmail,
+              playBtn.dataset.blackEmail
+            );
+            return;
+          }
+
+          const resultBtn = e.target.closest("button[data-result]");
+          if (resultBtn) {
+            (async () => {
+              if (tournamentBusy) return;
+              tournamentBusy = true;
+              try {
+                const isAdmin = listEl.dataset.isAdmin === "1";
+                if (!isAdmin && !isCurrentUserReferee()) throw new Error("No tenés permiso para cargar resultados");
+                const result = resultBtn.dataset.result;
+                if (
+                  (result === "wo-black" || result === "wo-white") &&
+                  !confirm("¿Confirmás declarar esta partida como W.O. (incomparecencia)?")
+                ) {
+                  tournamentBusy = false;
+                  return;
+                }
+                const wasPending = lastTournamentState && lastTournamentState.meta.roundStatus === "pending_approval";
+                const newState = await fbSubmitResult(resultBtn.dataset.round, resultBtn.dataset.board, result);
+                if (!wasPending && newState.meta.roundStatus === "pending_approval") {
+                  toast("✅ Ya están todos los resultados de la ronda. Revisá y aprobá la siguiente ronda.");
+                } else if (!wasPending && newState.meta.status === "finished") {
+                  toast("🏁 Se jugaron todas las rondas: el torneo terminó.");
+                }
+              } catch (err) {
+                toast("❌ No se pudo cargar el resultado: " + err.message);
+              } finally {
+                tournamentBusy = false;
+              }
+            })();
+            return;
+          }
+
+          const suspendBtn = e.target.closest("button[data-suspend-round]");
+          if (suspendBtn) {
+            (async () => {
+              if (tournamentBusy) return;
+              tournamentBusy = true;
+              try {
+                const suspend = suspendBtn.dataset.suspendAction === "suspend";
+                await fbSetGameSuspended(suspendBtn.dataset.suspendRound, suspendBtn.dataset.suspendBoard, suspend);
+                toast(suspend ? "⏸️ Partida suspendida" : "▶️ Partida reanudada");
+              } catch (err) {
+                showError(err);
+              } finally {
+                tournamentBusy = false;
+              }
+            })();
+          }
+        });
+      }
+
       function renderTournamentState(state) {
         const setupBox = document.getElementById("tournament-setup-box");
         const activeBox = document.getElementById("tournament-active-box");
@@ -6110,214 +6187,189 @@
         // mesas y el reloj se vean en vivo. Lo que ya NO pasa es que la
         // ESCRITURA de esa jugada compita con la de otra mesa (antes todas
         // pisaban el mismo documento; ahora cada mesa tiene el suyo, ver
-        // fbMakeMove). Acá seguimos comparando contra la última data ya
-        // pintada y salteamos el rebuild si es idéntica, para no reconstruir
-        // las ~N tarjetas de mesa enteras (con sus botones y listeners) en
-        // cada evento si la mesa de este dispositivo no cambió.
+        // fbMakeMove).
+        //
+        // RENDER INCREMENTAL POR MESA: antes, cualquier jugada en
+        // CUALQUIER mesa disparaba una firma sobre TODA la ronda
+        // (currentRoundPairings + currentRoundGames juntos), así que con
+        // varias partidas online en simultáneo cada jugada terminaba
+        // reconstruyendo las N tarjetas de mesa enteras (con sus botones
+        // y listeners) muchas veces por segundo. Ahora cada tarjeta lleva
+        // su propia firma (solo con los datos de ESA mesa) y se saltea el
+        // rebuild si no cambió, así una jugada en la mesa 3 no toca el DOM
+        // de las mesas 1, 2, 4, etc.
         const currentRoundGames = lastRoundGames;
-        const pairingsSignature = JSON.stringify([currentRoundPairings, currentRoundGames, isAdmin, isReferee, myEmail]);
-        if (listEl.dataset.sig === pairingsSignature) {
-          renderStandingsAndPlayers_(state, isAdmin, isReferee);
-          return;
-        }
-        listEl.dataset.sig = pairingsSignature;
+        setupPairingsListDelegation_(listEl);
+        listEl.dataset.isAdmin = isAdmin ? "1" : "0";
+        listEl.dataset.isReferee = isReferee ? "1" : "0";
 
-        listEl.innerHTML = "";
-        currentRoundPairings
-          .sort((a, b) => a.board - b.board)
-          .forEach((p) => {
-            const row = document.createElement("div");
+        const sortedPairings = currentRoundPairings.slice().sort((a, b) => a.board - b.board);
+        const seenBoards = new Set();
+
+        sortedPairings.forEach((p) => {
+          seenBoards.add(String(p.board));
+          const isBye = p.blackId === "";
+          const game = isBye ? null : currentRoundGames.find((g) => g.round === p.round && g.board === p.board);
+          const rowSignature = JSON.stringify([p, game, isAdmin, isReferee, myEmail]);
+
+          let row = listEl.querySelector(`.pairing-card[data-board-key="${p.board}"]`);
+          if (row && row.dataset.sig === rowSignature) return; // esta mesa no cambió: no se toca su DOM
+
+          if (!row) {
+            row = document.createElement("div");
             row.className = "pairing-card";
-            if (p.blackId === "") {
-              row.innerHTML = `
-                <div class="pairing-card-header">
-                  <div class="pairing-card-board">Mesa ${p.board}</div>
-                  <span class="pairing-status pairing-status-bye">⭐ Punto automático</span>
-                </div>
-                <div class="pairing-card-names">
-                  <span class="pairing-side pairing-side-white">⚪ ${escapeHtml_(p.whiteName)}</span>
-                  <span class="vs">—</span>
-                  <span class="pairing-side-empty">Libre</span>
-                </div>
-                <div class="pairing-card-detail">Descansa esta ronda (bye, +1 punto)</div>
-              `;
-              listEl.appendChild(row);
-              return;
-            }
-            const game = lastRoundGames.find((g) => g.round === p.round && g.board === p.board);
-            const bothJoined = !game || !game.clock || ((game.joined || {}).w && (game.joined || {}).b);
-            const graceMinutes = Number(state.meta.woGraceMinutes) || 0;
-            const joinedInfo = (game && game.joined) || { w: false, b: false };
-            const onlyOneJoined = game && game.status === "ongoing" && joinedInfo.w !== joinedInfo.b;
-            const woEtaText =
-              graceMinutes > 0 && onlyOneJoined && game.startedAt
-                ? (() => {
-                    const remainingMs = game.startedAt + graceMinutes * 60000 - Date.now();
-                    const absentName = escapeHtml_(joinedInfo.w ? p.blackName : p.whiteName);
-                    return remainingMs > 0
-                      ? `⏱️ Esperando a ${absentName} — WO automático en ${Math.ceil(remainingMs / 60000)} min`
-                      : `⏱️ Tiempo de espera reglamentario cumplido para ${absentName}`;
-                  })()
-                : "";
-            // Detalle extra debajo del badge de estado: solo lo que no está
-            // ya dicho por el badge (última jugada, cuenta regresiva de WO).
-            // Evita repetir "Finalizada" / "Esperando jugadores" dos veces.
-            const gameStatusText =
-              game && game.status !== "finished" && game.status !== "suspended" && woEtaText
-                ? woEtaText
-                : game && game.status !== "finished" && game.status !== "suspended" && game.lastMoveSan
-                ? "Última jugada: " + game.lastMoveSan
-                : "";
-            // Estado de la mesa: una etiqueta corta y clara, para poder
-            // barrer la lista de un vistazo sin leer cada fila entera.
-            // Cuando hay resultado cargado pero la ronda todavía está
-            // "pending_approval" (y no está cerrada), lo marcamos como
-            // pendiente de confirmar en vez de finalizado directamente.
-            let statusCls, statusText;
-            if (p.result) {
-              if (state.meta.roundStatus === "pending_approval" && !p.locked) {
-                statusCls = "pending";
-                statusText = "🟣 Resultado pendiente de confirmar";
-              } else if (p.result === "wo-black" || p.result === "wo-white") {
-                statusCls = "wo";
-                statusText = "⚫ Incomparecencia";
-              } else if (p.result === "1/2-1/2") {
-                statusCls = "draw";
-                statusText = "🔵 Tablas acordadas";
-              } else {
-                statusCls = "finished";
-                statusText = "⚪ Finalizada";
-              }
-              if (p.locked) statusText += " 🔒";
-            } else if (game && game.status === "suspended") {
-              statusCls = "suspended";
-              statusText = "⏸️ Suspendida";
-            } else if (game && game.clock && !bothJoined) {
-              statusCls = "waiting";
-              statusText = "🟡 Esperando jugadores";
-            } else {
-              statusCls = "playing";
-              statusText = "🟢 En juego";
-            }
-            const clockHtml =
-              game && game.clock
-                ? `<div class="pairing-card-clock">⏱️ ${formatTime(game.clock.w)} — ${formatTime(game.clock.b)}</div>`
-                : "";
-            const isMyGame =
-              (p.whiteEmail && p.whiteEmail.toLowerCase() === myEmail) || (p.blackEmail && p.blackEmail.toLowerCase() === myEmail);
-            const canPlay = isAdmin || isMyGame;
-            const opts = [
-              ["1-0", "1-0"],
-              ["1/2-1/2", "½-½"],
-              ["0-1", "0-1"],
-            ];
-            // Declarar W.O. (incomparecencia) es una acción exclusiva del
-            // árbitro: solo a él se le muestran estos dos botones extra.
-            if (isReferee) {
-              opts.push(["wo-black", "WO Blancas"]);
-              opts.push(["wo-white", "WO Negras"]);
-            }
-            // Una ronda ya cerrada (ver fbCloseRound) queda bloqueada para
-            // todos menos el árbitro: el admin y los jugadores ya solo ven
-            // el resultado (con un candado) en vez de poder tocarlo.
-            const canEditResult = (isAdmin || isReferee) && !(p.locked && !isReferee);
-            const btnsHtml = canEditResult
-              ? opts
-                  .map(
-                    ([val, label]) =>
-                      `<button data-round="${p.round}" data-board="${p.board}" data-result="${val}" class="${p.result === val ? "selected" : ""}">${label}</button>`
-                  )
-                  .join("")
-              : p.result
-              ? `<span class="muted">${resultLabel(p.result)}${p.locked ? " 🔒" : ""}</span>`
-              : "";
-            // Cualquiera puede entrar a mirar una partida del torneo, esté o
-            // no registrado (no hace falta ser jugador ni admin): si no le
-            // toca jugar esa partida, entra como espectador (ver
-            // enterTournamentMatch / tournamentMyColor).
-            const playBtnHtml = `<button class="btn" data-play-round="${p.round}" data-play-board="${p.board}" data-white="${escapeHtml_(p.whiteName)}" data-black="${escapeHtml_(p.blackName)}" data-white-email="${escapeHtml_(p.whiteEmail || "")}" data-black-email="${escapeHtml_(p.blackEmail || "")}">${canPlay ? "▶️ Jugar" : "👁️ Ver"}</button>`;
-            // Suspender/reanudar una partida es exclusivo del árbitro, y solo
-            // tiene sentido mientras la partida sigue en curso.
-            const suspendBtnHtml =
-              isReferee && game && game.status !== "finished"
-                ? `<button class="btn" data-suspend-round="${p.round}" data-suspend-board="${p.board}" data-suspend-action="${
-                    game.status === "suspended" ? "resume" : "suspend"
-                  }">${game.status === "suspended" ? "▶️ Reanudar" : "⏸️ Suspender"}</button>`
-                : "";
+            row.dataset.boardKey = p.board;
+            listEl.appendChild(row);
+          }
+          row.dataset.sig = rowSignature;
+
+          if (isBye) {
             row.innerHTML = `
               <div class="pairing-card-header">
                 <div class="pairing-card-board">Mesa ${p.board}</div>
-                <span class="pairing-status pairing-status-${statusCls}">${statusText}</span>
+                <span class="pairing-status pairing-status-bye">⭐ Punto automático</span>
               </div>
               <div class="pairing-card-names">
                 <span class="pairing-side pairing-side-white">⚪ ${escapeHtml_(p.whiteName)}</span>
-                <span class="vs">vs</span>
-                <span class="pairing-side pairing-side-black">${escapeHtml_(p.blackName)} ⚫</span>
+                <span class="vs">—</span>
+                <span class="pairing-side-empty">Libre</span>
               </div>
-              ${clockHtml}
-              ${gameStatusText ? `<div class="pairing-card-detail">${gameStatusText}</div>` : ""}
-              <div class="pairing-card-actions">
-                ${playBtnHtml}
-                ${suspendBtnHtml}
-                <div class="pairing-result-btns">${btnsHtml}</div>
-              </div>
+              <div class="pairing-card-detail">Descansa esta ronda (bye, +1 punto)</div>
             `;
-            listEl.appendChild(row);
-          });
+            return;
+          }
 
-        listEl.querySelectorAll("button[data-play-round]").forEach((btn) => {
-          btn.addEventListener("click", () => {
-            enterTournamentMatch(
-              Number(btn.dataset.playRound),
-              Number(btn.dataset.playBoard),
-              btn.dataset.white,
-              btn.dataset.black,
-              btn.dataset.whiteEmail,
-              btn.dataset.blackEmail
-            );
-          });
+          const bothJoined = !game || !game.clock || ((game.joined || {}).w && (game.joined || {}).b);
+          const graceMinutes = Number(state.meta.woGraceMinutes) || 0;
+          const joinedInfo = (game && game.joined) || { w: false, b: false };
+          const onlyOneJoined = game && game.status === "ongoing" && joinedInfo.w !== joinedInfo.b;
+          const woEtaText =
+            graceMinutes > 0 && onlyOneJoined && game.startedAt
+              ? (() => {
+                  const remainingMs = game.startedAt + graceMinutes * 60000 - Date.now();
+                  const absentName = escapeHtml_(joinedInfo.w ? p.blackName : p.whiteName);
+                  return remainingMs > 0
+                    ? `⏱️ Esperando a ${absentName} — WO automático en ${Math.ceil(remainingMs / 60000)} min`
+                    : `⏱️ Tiempo de espera reglamentario cumplido para ${absentName}`;
+                })()
+              : "";
+          // Detalle extra debajo del badge de estado: solo lo que no está
+          // ya dicho por el badge (última jugada, cuenta regresiva de WO).
+          // Evita repetir "Finalizada" / "Esperando jugadores" dos veces.
+          const gameStatusText =
+            game && game.status !== "finished" && game.status !== "suspended" && woEtaText
+              ? woEtaText
+              : game && game.status !== "finished" && game.status !== "suspended" && game.lastMoveSan
+              ? "Última jugada: " + game.lastMoveSan
+              : "";
+          // Estado de la mesa: una etiqueta corta y clara, para poder
+          // barrer la lista de un vistazo sin leer cada fila entera.
+          // Cuando hay resultado cargado pero la ronda todavía está
+          // "pending_approval" (y no está cerrada), lo marcamos como
+          // pendiente de confirmar en vez de finalizado directamente.
+          let statusCls, statusText;
+          if (p.result) {
+            if (state.meta.roundStatus === "pending_approval" && !p.locked) {
+              statusCls = "pending";
+              statusText = "🟣 Resultado pendiente de confirmar";
+            } else if (p.result === "wo-black" || p.result === "wo-white") {
+              statusCls = "wo";
+              statusText = "⚫ Incomparecencia";
+            } else if (p.result === "1/2-1/2") {
+              statusCls = "draw";
+              statusText = "🔵 Tablas acordadas";
+            } else {
+              statusCls = "finished";
+              statusText = "⚪ Finalizada";
+            }
+            if (p.locked) statusText += " 🔒";
+          } else if (game && game.status === "suspended") {
+            statusCls = "suspended";
+            statusText = "⏸️ Suspendida";
+          } else if (game && game.clock && !bothJoined) {
+            statusCls = "waiting";
+            statusText = "🟡 Esperando jugadores";
+          } else {
+            statusCls = "playing";
+            statusText = "🟢 En juego";
+          }
+          const clockHtml =
+            game && game.clock
+              ? `<div class="pairing-card-clock">⏱️ ${formatTime(game.clock.w)} — ${formatTime(game.clock.b)}</div>`
+              : "";
+          const isMyGame =
+            (p.whiteEmail && p.whiteEmail.toLowerCase() === myEmail) || (p.blackEmail && p.blackEmail.toLowerCase() === myEmail);
+          const canPlay = isAdmin || isMyGame;
+          const opts = [
+            ["1-0", "1-0"],
+            ["1/2-1/2", "½-½"],
+            ["0-1", "0-1"],
+          ];
+          // Declarar W.O. (incomparecencia) es una acción exclusiva del
+          // árbitro: solo a él se le muestran estos dos botones extra.
+          if (isReferee) {
+            opts.push(["wo-black", "WO Blancas"]);
+            opts.push(["wo-white", "WO Negras"]);
+          }
+          // Una ronda ya cerrada (ver fbCloseRound) queda bloqueada para
+          // todos menos el árbitro: el admin y los jugadores ya solo ven
+          // el resultado (con un candado) en vez de poder tocarlo.
+          const canEditResult = (isAdmin || isReferee) && !(p.locked && !isReferee);
+          const btnsHtml = canEditResult
+            ? opts
+                .map(
+                  ([val, label]) =>
+                    `<button data-round="${p.round}" data-board="${p.board}" data-result="${val}" class="${p.result === val ? "selected" : ""}">${label}</button>`
+                )
+                .join("")
+            : p.result
+            ? `<span class="muted">${resultLabel(p.result)}${p.locked ? " 🔒" : ""}</span>`
+            : "";
+          // Cualquiera puede entrar a mirar una partida del torneo, esté o
+          // no registrado (no hace falta ser jugador ni admin): si no le
+          // toca jugar esa partida, entra como espectador (ver
+          // enterTournamentMatch / tournamentMyColor).
+          const playBtnHtml = `<button class="btn" data-play-round="${p.round}" data-play-board="${p.board}" data-white="${escapeHtml_(p.whiteName)}" data-black="${escapeHtml_(p.blackName)}" data-white-email="${escapeHtml_(p.whiteEmail || "")}" data-black-email="${escapeHtml_(p.blackEmail || "")}">${canPlay ? "▶️ Jugar" : "👁️ Ver"}</button>`;
+          // Suspender/reanudar una partida es exclusivo del árbitro, y solo
+          // tiene sentido mientras la partida sigue en curso.
+          const suspendBtnHtml =
+            isReferee && game && game.status !== "finished"
+              ? `<button class="btn" data-suspend-round="${p.round}" data-suspend-board="${p.board}" data-suspend-action="${
+                  game.status === "suspended" ? "resume" : "suspend"
+                }">${game.status === "suspended" ? "▶️ Reanudar" : "⏸️ Suspender"}</button>`
+              : "";
+          row.innerHTML = `
+            <div class="pairing-card-header">
+              <div class="pairing-card-board">Mesa ${p.board}</div>
+              <span class="pairing-status pairing-status-${statusCls}">${statusText}</span>
+            </div>
+            <div class="pairing-card-names">
+              <span class="pairing-side pairing-side-white">⚪ ${escapeHtml_(p.whiteName)}</span>
+              <span class="vs">vs</span>
+              <span class="pairing-side pairing-side-black">${escapeHtml_(p.blackName)} ⚫</span>
+            </div>
+            ${clockHtml}
+            ${gameStatusText ? `<div class="pairing-card-detail">${gameStatusText}</div>` : ""}
+            <div class="pairing-card-actions">
+              ${playBtnHtml}
+              ${suspendBtnHtml}
+              <div class="pairing-result-btns">${btnsHtml}</div>
+            </div>
+          `;
         });
 
-        listEl.querySelectorAll("button[data-result]").forEach((btn) => {
-          btn.addEventListener("click", async () => {
-            if (tournamentBusy) return;
-            tournamentBusy = true;
-            try {
-              if (!isAdmin && !isCurrentUserReferee()) throw new Error("No tenés permiso para cargar resultados");
-              const result = btn.dataset.result;
-              if ((result === "wo-black" || result === "wo-white") && !confirm("¿Confirmás declarar esta partida como W.O. (incomparecencia)?")) {
-                tournamentBusy = false;
-                return;
-              }
-              const wasPending = state.meta.roundStatus === "pending_approval";
-              const newState = await fbSubmitResult(btn.dataset.round, btn.dataset.board, result);
-              if (!wasPending && newState.meta.roundStatus === "pending_approval") {
-                toast("✅ Ya están todos los resultados de la ronda. Revisá y aprobá la siguiente ronda.");
-              } else if (!wasPending && newState.meta.status === "finished") {
-                toast("🏁 Se jugaron todas las rondas: el torneo terminó.");
-              }
-            } catch (err) {
-              toast("❌ No se pudo cargar el resultado: " + err.message);
-            } finally {
-              tournamentBusy = false;
-            }
-          });
+        // Saca del DOM las mesas que ya no están en la ronda actual (por
+        // ejemplo, al avanzar de ronda con menos mesas por un bye nuevo).
+        Array.from(listEl.children).forEach((el) => {
+          if (el.dataset && el.dataset.boardKey != null && !seenBoards.has(el.dataset.boardKey)) el.remove();
         });
 
-        listEl.querySelectorAll("button[data-suspend-round]").forEach((btn) => {
-          btn.addEventListener("click", async () => {
-            if (tournamentBusy) return;
-            tournamentBusy = true;
-            try {
-              const suspend = btn.dataset.suspendAction === "suspend";
-              await fbSetGameSuspended(btn.dataset.suspendRound, btn.dataset.suspendBoard, suspend);
-              toast(suspend ? "⏸️ Partida suspendida" : "▶️ Partida reanudada");
-            } catch (err) {
-              showError(err);
-            } finally {
-              tournamentBusy = false;
-            }
-          });
+        // Reordena las tarjetas por número de mesa (por si el orden
+        // cambió); como la mayoría ya está en su lugar, esto casi siempre
+        // es un no-op barato.
+        sortedPairings.forEach((p, idx) => {
+          const row = listEl.querySelector(`.pairing-card[data-board-key="${p.board}"]`);
+          if (row && listEl.children[idx] !== row) listEl.insertBefore(row, listEl.children[idx] || null);
         });
 
         renderStandingsAndPlayers_(state, isAdmin, isReferee);
