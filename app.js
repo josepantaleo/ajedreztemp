@@ -626,11 +626,23 @@
         opponentMoveHighlight = null;
       }
 
+      // Casillas del tablero persistidas entre renders. Antes CADA jugada
+      // (propia o recién llegada del rival por Firebase) destruía las 64
+      // casillas (board.innerHTML = "") y las volvía a crear desde cero,
+      // con sus etiquetas de coordenadas y su listener de click, aunque lo
+      // único que cambiara fuera qué pieza está en qué casilla. Eso es
+      // justo lo que más se nota en un torneo online, donde el tablero se
+      // refresca en cada snapshot de Firestore. Ahora solo se reconstruye
+      // el tablero entero cuando cambia la orientación (flip) o la
+      // primera vez; el resto de las jugadas reutiliza las mismas 64
+      // casillas y solo actualiza sus clases y la pieza que contienen.
+      let boardSquareEls_ = null; // Map<sqName, HTMLElement>
+      let boardFlipState_ = null;
+
       function render() {
         const board = document.getElementById("board");
         const boardFrameEl = board.closest(".board-frame");
         if (boardFrameEl) boardFrameEl.classList.toggle("thinking", !!botThinking);
-        board.innerHTML = "";
         const isCheck = game.in_check();
         const turn = game.turn();
         // En una partida de torneo no se resaltan amenazas ni se explican
@@ -666,74 +678,101 @@
         const fullHistory = game.history({ verbose: true });
         const lastMove = fullHistory.length > 0 ? fullHistory[fullHistory.length - 1] : null;
 
-        for (const r of rows) {
-          for (const c of cols) {
-            const sqName = squares[c] + (8 - r);
-            const square = document.createElement("div");
-            square.className = "square " + ((r + c) % 2 ? "dark" : "light");
-            square.dataset.square = sqName;
+        // La flecha de jugada del rival es el único hijo de #board que no
+        // es una casilla; se saca siempre acá (se vuelve a agregar más
+        // abajo si corresponde) para que no estorbe al reutilizar las 64
+        // casillas ni quede una flecha vieja pegada.
+        const oldArrow = board.querySelector(".opp-move-arrow-overlay");
+        if (oldArrow) oldArrow.remove();
 
-            if (selected === sqName) square.classList.add("selected");
+        const needsRebuild =
+          !boardSquareEls_ || boardFlipState_ !== isFlipped || board.children.length !== 64;
 
-            if (lastMove && (lastMove.from === sqName || lastMove.to === sqName)) {
-              square.classList.add("last");
-            }
+        if (needsRebuild) {
+          board.innerHTML = "";
+          boardSquareEls_ = new Map();
+          for (const r of rows) {
+            for (const c of cols) {
+              const sqName = squares[c] + (8 - r);
+              const square = document.createElement("div");
+              square.className = "square " + ((r + c) % 2 ? "dark" : "light");
+              square.dataset.square = sqName;
 
-            // Partidas de torneo: al recibir la jugada del rival se recarga
-            // el FEN y se pierde el historial local, así que la casilla
-            // "last" de arriba no alcanza a marcarse. Usamos en su lugar
-            // este resaltado temporal (se apaga solo a los pocos segundos).
-            if (opponentMoveHighlight && (opponentMoveHighlight.from === sqName || opponentMoveHighlight.to === sqName)) {
-              square.classList.add("opp-move");
-            }
-
-            const pieceObj = game.get(sqName);
-            if (isCheck && pieceObj && pieceObj.type === 'k' && pieceObj.color === turn) {
-              square.classList.add("check");
-            }
-
-            if (validMoves.includes(sqName) && showLegalMoves) {
-              square.classList.add("hint");
-            }
-
-            if (pieceObj) {
-              if (threatenedSquares && threatenedSquares.has(sqName)) {
-                square.classList.add("threat");
+              if (c === (isFlipped ? 7 : 0)) {
+                const rank = document.createElement("span");
+                rank.className = "coord rank";
+                rank.textContent = 8 - r;
+                square.appendChild(rank);
               }
-              const pieceEl = document.createElement("div");
-              pieceEl.className = "piece " + (pieceObj.color === "w" ? "white-piece" : "black-piece");
-              pieceEl.textContent = PIECES[pieceObj.color + pieceObj.type.toUpperCase()];
-              pieceEl.dataset.piece = pieceObj.type.toUpperCase();
-              square.appendChild(pieceEl);
-              attachPieceDrag(pieceEl, sqName);
-              if (justMovedAnim && justMovedAnim.to === sqName) {
-                movedPieceEl = pieceEl;
+              if (r === (isFlipped ? 0 : 7)) {
+                const file = document.createElement("span");
+                file.className = "coord file";
+                file.textContent = squares[c];
+                square.appendChild(file);
               }
-            }
 
-            if (justMovedAnim && justMovedAnim.captured && justMovedAnim.capturedSquare === sqName) {
-              capturedSquareEl = square;
+              square.onclick = () => clickSquare(sqName);
+              board.appendChild(square);
+              boardSquareEls_.set(sqName, square);
             }
+          }
+          boardFlipState_ = isFlipped;
+        }
 
-            if (justMovedAnim && justMovedAnim.to === sqName && justMovedAnim.captured) {
-              square.classList.add("capture-flash");
-            }
+        for (const [sqName, square] of boardSquareEls_) {
+          // La casilla se reutiliza de un render al otro, así que primero
+          // se limpian todas las clases que dependen de la posición actual
+          // (si no, quedarían pegadas las de la jugada anterior).
+          square.classList.remove(
+            "selected", "last", "opp-move", "check", "hint", "threat", "capture-flash"
+          );
+          const oldPiece = square.querySelector(".piece:not(.piece-captured-ghost)");
+          if (oldPiece) oldPiece.remove();
 
-            if (c === (isFlipped ? 7 : 0)) {
-              const rank = document.createElement("span");
-              rank.className = "coord rank";
-              rank.textContent = 8 - r;
-              square.appendChild(rank);
-            }
-            if (r === (isFlipped ? 0 : 7)) {
-              const file = document.createElement("span");
-              file.className = "coord file";
-              file.textContent = squares[c];
-              square.appendChild(file);
-            }
+          if (selected === sqName) square.classList.add("selected");
 
-            square.onclick = () => clickSquare(sqName);
-            board.appendChild(square);
+          if (lastMove && (lastMove.from === sqName || lastMove.to === sqName)) {
+            square.classList.add("last");
+          }
+
+          // Partidas de torneo: al recibir la jugada del rival se recarga
+          // el FEN y se pierde el historial local, así que la casilla
+          // "last" de arriba no alcanza a marcarse. Usamos en su lugar
+          // este resaltado temporal (se apaga solo a los pocos segundos).
+          if (opponentMoveHighlight && (opponentMoveHighlight.from === sqName || opponentMoveHighlight.to === sqName)) {
+            square.classList.add("opp-move");
+          }
+
+          const pieceObj = game.get(sqName);
+          if (isCheck && pieceObj && pieceObj.type === 'k' && pieceObj.color === turn) {
+            square.classList.add("check");
+          }
+
+          if (validMoves.includes(sqName) && showLegalMoves) {
+            square.classList.add("hint");
+          }
+
+          if (pieceObj) {
+            if (threatenedSquares && threatenedSquares.has(sqName)) {
+              square.classList.add("threat");
+            }
+            const pieceEl = document.createElement("div");
+            pieceEl.className = "piece " + (pieceObj.color === "w" ? "white-piece" : "black-piece");
+            pieceEl.textContent = PIECES[pieceObj.color + pieceObj.type.toUpperCase()];
+            pieceEl.dataset.piece = pieceObj.type.toUpperCase();
+            square.appendChild(pieceEl);
+            attachPieceDrag(pieceEl, sqName);
+            if (justMovedAnim && justMovedAnim.to === sqName) {
+              movedPieceEl = pieceEl;
+            }
+          }
+
+          if (justMovedAnim && justMovedAnim.captured && justMovedAnim.capturedSquare === sqName) {
+            capturedSquareEl = square;
+          }
+
+          if (justMovedAnim && justMovedAnim.to === sqName && justMovedAnim.captured) {
+            square.classList.add("capture-flash");
           }
         }
 
