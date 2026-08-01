@@ -271,6 +271,12 @@
         .theme-grid {
           grid-template-columns: 1fr;
         }
+        /* Formulario de inscripción al torneo: en mobile el botón ocupa
+           todo el ancho (mismo ancho que el input de arriba) en vez de
+           quedar chico pegado al texto, más fácil de tocar */
+        #tournament-self-register-btn {
+          width: 100%;
+        }
       }
 
       button,
