@@ -2987,7 +2987,7 @@
 
         <section class="page" id="page-configuracion">
           <div class="card">
-            <div class="panel-title">⚙️ Configuración</div>
+            <div class="panel-title">👤 Perfil</div>
             <div class="settings" style="max-width: 500px">
               <label for="student-name">
                 Nombre del alumno
@@ -3006,7 +3006,74 @@
           </div>
 
           <div class="card" style="margin-top: 20px">
+            <div class="panel-title">🎮 Preferencias de juego</div>
+            <p style="color: var(--muted); margin-top: -4px; margin-bottom: 10px">
+              Se aplican en todas las partidas. También podés cambiarlas al vuelo desde la pantalla "Jugar".
+            </p>
+
+            <div class="toggle">
+              <div>
+                Sonido<small
+                  >Efectos de sonido al mover, capturar y dar jaque.</small
+                >
+              </div>
+              <label class="switch">
+                <input type="checkbox" id="toggle-sound-cfg" checked />
+                <span class="slider"></span>
+              </label>
+            </div>
+
+            <div class="toggle">
+              <div>
+                Movimientos legales<small
+                  >Mostrar dónde puede ir la pieza seleccionada.</small
+                >
+              </div>
+              <label class="switch">
+                <input type="checkbox" id="toggle-legal-cfg" checked />
+                <span class="slider"></span>
+              </label>
+            </div>
+
+            <div class="toggle">
+              <div>Amenazas<small>Resaltar piezas atacadas en el tablero.</small></div>
+              <label class="switch">
+                <input type="checkbox" id="toggle-threats-cfg" checked />
+                <span class="slider"></span>
+              </label>
+            </div>
+
+            <div class="toggle">
+              <div>
+                Explicaciones<small
+                  >Recibir consejos del tutor durante la partida.</small
+                >
+              </div>
+              <label class="switch">
+                <input type="checkbox" id="toggle-explain-cfg" checked />
+                <span class="slider"></span>
+              </label>
+            </div>
+          </div>
+
+          <div class="card" style="margin-top: 20px">
+            <div class="panel-title">🎨 Apariencia</div>
+            <div class="theme-toolbar">
+              <div class="theme-current">
+                Estilo actual:
+                <strong id="current-theme-name-cfg">Azul moderno</strong>
+              </div>
+              <button class="btn" data-page-action="temas">
+                🎨 Cambiar tema
+              </button>
+            </div>
+          </div>
+
+          <div class="card" style="margin-top: 20px">
             <div class="panel-title">💾 Datos y respaldo</div>
+            <p style="color: var(--muted); margin-top: -4px; margin-bottom: 10px">
+              Exportá tu progreso para guardarlo o pasarlo a otro dispositivo, o importá un respaldo anterior.
+            </p>
             <button class="btn" id="export-json">📤 Exportar datos</button>
             <label class="btn" style="display: inline-block; cursor: pointer">
               📥 Importar datos

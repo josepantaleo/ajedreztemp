@@ -1941,27 +1941,47 @@
         });
       }
 
+      // Sonido: checkbox rápido en "Jugar" + espejo centralizado en "Configuración".
+      // Antes esta preferencia no se guardaba entre sesiones; ahora persiste
+      // igual que el resto (movimientos legales, amenazas, explicaciones).
+      let soundEnabled = localStorage.getItem("chessSoundEnabled") !== "off";
       const soundToggle = document.getElementById("toggle-sound");
-      if (soundToggle) {
-        SoundFX.setEnabled(soundToggle.checked);
-        soundToggle.addEventListener("change", () => {
-          SoundFX.setEnabled(soundToggle.checked);
-          if (soundToggle.checked) {
-            SoundFX.unlock();
-            SoundFX.select();
-          }
-        });
+      const soundToggleCfg = document.getElementById("toggle-sound-cfg");
+
+      function syncSoundUI() {
+        if (soundToggle) soundToggle.checked = soundEnabled;
+        if (soundToggleCfg) soundToggleCfg.checked = soundEnabled;
       }
+
+      function setSoundEnabled(value) {
+        soundEnabled = value;
+        localStorage.setItem("chessSoundEnabled", soundEnabled ? "on" : "off");
+        SoundFX.setEnabled(soundEnabled);
+        syncSoundUI();
+        if (soundEnabled) {
+          SoundFX.unlock();
+          SoundFX.select();
+        }
+      }
+
+      SoundFX.setEnabled(soundEnabled);
+      syncSoundUI();
+      if (soundToggle) soundToggle.addEventListener("change", () => setSoundEnabled(soundToggle.checked));
+      if (soundToggleCfg) soundToggleCfg.addEventListener("change", () => setSoundEnabled(soundToggleCfg.checked));
+
       // Los navegadores requieren un gesto del usuario para habilitar audio
       document.body.addEventListener("pointerdown", () => SoundFX.unlock(), { once: true });
 
       // Activar/desactivar el resaltado de jugadas posibles (checkbox del
-      // panel "Modo educativo" + botón rápido, disponible también en pantalla completa)
+      // panel "Modo educativo" + espejo en "Configuración" + botón rápido,
+      // disponible también en pantalla completa)
       const legalMovesCheckbox = document.getElementById("toggle-legal");
+      const legalMovesCheckboxCfg = document.getElementById("toggle-legal-cfg");
       const legalMovesBtn = document.getElementById("toggle-legal-btn");
 
       function syncLegalMovesUI() {
         if (legalMovesCheckbox) legalMovesCheckbox.checked = showLegalMoves;
+        if (legalMovesCheckboxCfg) legalMovesCheckboxCfg.checked = showLegalMoves;
         if (legalMovesBtn) {
           legalMovesBtn.textContent = showLegalMoves ? "🎯 Jugadas: ON" : "🎯 Jugadas: OFF";
           legalMovesBtn.classList.toggle("off", !showLegalMoves);
@@ -1980,23 +2000,35 @@
       if (legalMovesCheckbox) {
         legalMovesCheckbox.addEventListener("change", () => setShowLegalMoves(legalMovesCheckbox.checked));
       }
+      if (legalMovesCheckboxCfg) {
+        legalMovesCheckboxCfg.addEventListener("change", () => setShowLegalMoves(legalMovesCheckboxCfg.checked));
+      }
       if (legalMovesBtn) {
         legalMovesBtn.addEventListener("click", () => setShowLegalMoves(!showLegalMoves));
       }
       syncLegalMovesUI();
 
       // Activar/desactivar el resaltado de piezas amenazadas (checkbox del
-      // panel "Modo educativo")
+      // panel "Modo educativo" + espejo en "Configuración")
       const threatsCheckbox = document.getElementById("toggle-threats");
-      if (threatsCheckbox) {
-        threatsCheckbox.checked = showThreats;
-        threatsCheckbox.addEventListener("change", () => {
-          showThreats = threatsCheckbox.checked;
-          localStorage.setItem("chessShowThreats", showThreats ? "on" : "off");
-          if (gameStarted) render();
-          toast(showThreats ? "⚔️ Amenazas activadas" : "⚔️ Amenazas desactivadas");
-        });
+      const threatsCheckboxCfg = document.getElementById("toggle-threats-cfg");
+
+      function syncThreatsUI() {
+        if (threatsCheckbox) threatsCheckbox.checked = showThreats;
+        if (threatsCheckboxCfg) threatsCheckboxCfg.checked = showThreats;
       }
+
+      function setShowThreats(value) {
+        showThreats = value;
+        localStorage.setItem("chessShowThreats", showThreats ? "on" : "off");
+        syncThreatsUI();
+        if (gameStarted) render();
+        toast(showThreats ? "⚔️ Amenazas activadas" : "⚔️ Amenazas desactivadas");
+      }
+
+      if (threatsCheckbox) threatsCheckbox.addEventListener("change", () => setShowThreats(threatsCheckbox.checked));
+      if (threatsCheckboxCfg) threatsCheckboxCfg.addEventListener("change", () => setShowThreats(threatsCheckboxCfg.checked));
+      syncThreatsUI();
 
       document.getElementById("new-game").onclick = () => {
         const modeValue = document.getElementById("mode").value;
@@ -2184,6 +2216,8 @@
         document.body.dataset.theme = current;
         localStorage.setItem("chessTheme", current);
         document.getElementById("current-theme-name").textContent = THEMES[current];
+        const themeNameCfg = document.getElementById("current-theme-name-cfg");
+        if (themeNameCfg) themeNameCfg.textContent = THEMES[current];
         document.querySelectorAll("[data-theme-card]").forEach(c => {
           c.classList.toggle("active", c.dataset.themeCard === current);
         });
@@ -2820,6 +2854,7 @@
       // =========================
       let explainMode = localStorage.getItem("chessExplainMode") !== "off";
       const explainToggleEl = document.getElementById("toggle-explain");
+      const explainToggleElCfg = document.getElementById("toggle-explain-cfg");
       const EDU_DEFAULT_TITLE = "Pensá antes de mover";
       const EDU_DEFAULT_TEXT = "Antes de jugar, preguntate: ¿qué amenaza mi rival?";
 
@@ -2830,15 +2865,22 @@
         if (textEl) textEl.textContent = EDU_DEFAULT_TEXT;
       }
 
-      if (explainToggleEl) {
-        explainToggleEl.checked = explainMode;
-        explainToggleEl.onchange = () => {
-          explainMode = explainToggleEl.checked;
-          localStorage.setItem("chessExplainMode", explainMode ? "on" : "off");
-          if (!explainMode) resetEduPanel();
-          toast(explainMode ? "📚 Explicaciones activadas" : "📚 Explicaciones desactivadas");
-        };
+      function syncExplainUI() {
+        if (explainToggleEl) explainToggleEl.checked = explainMode;
+        if (explainToggleElCfg) explainToggleElCfg.checked = explainMode;
       }
+
+      function setExplainMode(value) {
+        explainMode = value;
+        localStorage.setItem("chessExplainMode", explainMode ? "on" : "off");
+        syncExplainUI();
+        if (!explainMode) resetEduPanel();
+        toast(explainMode ? "📚 Explicaciones activadas" : "📚 Explicaciones desactivadas");
+      }
+
+      syncExplainUI();
+      if (explainToggleEl) explainToggleEl.onchange = () => setExplainMode(explainToggleEl.checked);
+      if (explainToggleElCfg) explainToggleElCfg.onchange = () => setExplainMode(explainToggleElCfg.checked);
 
       // Decide si corresponde explicar la jugada de "moverColor" (solo al rival del bot, o a todos en modo local)
       function shouldExplainMover(moverColor) {
