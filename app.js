@@ -2082,7 +2082,8 @@
       // completa, dejando el espacio real que ocupan el reloj y los controles
       // en CADA dispositivo (celular, tablet, notebook, con o sin notch).
       function sizeFullscreenBoard() {
-        if (!document.body.classList.contains("fullscreen-game")) return;
+        const bc = document.body.classList;
+        if (!bc.contains("fullscreen-game") && !bc.contains("tournament-board-max")) return;
         const boardFrame = document.querySelector(".board-frame");
         const gameCard = document.getElementById("game-card");
         if (!boardFrame || !gameCard) return;
@@ -7914,6 +7915,13 @@
 
           showPage("jugar");
 
+          // El tablero de una partida de torneo siempre se muestra lo más
+          // grande posible (mismo layout ya probado del modo "Pantalla
+          // completa" real, pero sin forzar la Fullscreen API del navegador).
+          // Si el jugador además toca "Pantalla completa", se suma la clase
+          // fullscreen-game encima de esta sin pisarla (ver setupFullscreenToggle).
+          document.body.classList.add("tournament-board-max");
+
           document.getElementById("tournament-match-bar").style.display = "";
           document.getElementById("tournament-match-title").textContent =
             `🏆 Torneo · Ronda ${round}, tablero #${board}: ${whiteName} vs ${blackName}`;
@@ -7998,6 +8006,20 @@
         unsubscribeCallSignaling();
 
         document.getElementById("tournament-match-bar").style.display = "none";
+
+        // Se apaga el modo de tablero maximizado y se limpia cualquier
+        // tamaño en px que haya calculado sizeFullscreenBoard(), para que
+        // el layout normal (con el panel de ajustes/jugadas) vuelva a
+        // controlar el tamaño del tablero fuera del torneo.
+        document.body.classList.remove("tournament-board-max");
+        resetBoardFrameSize();
+        // Si además había Fullscreen real del navegador activa, se sale
+        // también (el listener de "fullscreenchange" ya se encarga de
+        // sacar la clase fullscreen-game y actualizar el botón).
+        if (document.fullscreenElement) {
+          document.exitFullscreen().catch(() => {});
+        }
+
         ["new-game", "undo", "resign", "copy-game"].forEach((id) => {
           const el = document.getElementById(id);
           if (el) el.style.display = "";

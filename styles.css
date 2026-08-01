@@ -786,7 +786,8 @@
          navegador, en vez de medidas fijas en px)
       ========================================================= */
 
-      body.fullscreen-game {
+      body.fullscreen-game ,
+      body.tournament-board-max  {
         height: 100vh;
         height: 100dvh;
         width: 100vw;
@@ -795,7 +796,8 @@
         box-sizing: border-box;
       }
 
-      body.fullscreen-game .app {
+      body.fullscreen-game .app ,
+      body.tournament-board-max .app  {
         display: flex !important;
         height: 100vh;
         height: 100dvh;
@@ -804,14 +806,23 @@
 
       /* Ocultar elementos innecesarios */
       body.fullscreen-game .sidebar,
+      body.tournament-board-max .sidebar,
       body.fullscreen-game .topbar,
+      body.tournament-board-max .topbar,
       body.fullscreen-game .status,
+      body.tournament-board-max .status,
       body.fullscreen-game .floating-moves-card,
+      body.tournament-board-max .floating-moves-card,
       body.fullscreen-game .eval,
+      body.tournament-board-max .eval,
       body.fullscreen-game .fullscreen-edu-panel,
+      body.tournament-board-max .fullscreen-edu-panel,
       body.fullscreen-game .fullscreen-config-panel,
+      body.tournament-board-max .fullscreen-config-panel,
       body.fullscreen-game .right,
-      body.fullscreen-game .left {
+      body.tournament-board-max .right,
+      body.fullscreen-game .left ,
+      body.tournament-board-max .left  {
         display: none !important;
       }
 
@@ -822,7 +833,9 @@
          quedaba atrapado dentro de la página en vez de ocupar toda
          la pantalla. Por eso se veía solo una parte del tablero. */
       body.fullscreen-game .page,
-      body.fullscreen-game .page.active {
+      body.tournament-board-max .page,
+      body.fullscreen-game .page.active ,
+      body.tournament-board-max .page.active  {
         filter: none !important;
         transform: none !important;
         animation: none !important;
@@ -831,9 +844,13 @@
       /* Contenedor único: columna flex que reparte el espacio real
          entre reloj / tablero / controles, sin adivinar alturas */
       body.fullscreen-game .main,
+      body.tournament-board-max .main,
       body.fullscreen-game .game-layout,
+      body.tournament-board-max .game-layout,
       body.fullscreen-game .board-area,
-      body.fullscreen-game #game-card {
+      body.tournament-board-max .board-area,
+      body.fullscreen-game #game-card ,
+      body.tournament-board-max #game-card  {
         width: 100vw !important;
         height: 100vh !important;
         height: 100dvh !important;
@@ -876,7 +893,8 @@
         }
       }
 
-      body.fullscreen-game .clock {
+      body.fullscreen-game .clock ,
+      body.tournament-board-max .clock  {
         position: static !important;
         flex: 0 0 auto !important;
         display: flex !important;
@@ -893,7 +911,8 @@
         max-width: 100%;
       }
 
-      body.fullscreen-game .clock div {
+      body.fullscreen-game .clock div ,
+      body.tournament-board-max .clock div  {
         padding: clamp(6px, 1vh, 10px) clamp(12px, 3vw, 24px) !important;
         min-width: 0 !important;
         text-align: center !important;
@@ -908,21 +927,24 @@
         animation: fs-clock-pulse 2.5s ease-in-out infinite alternate !important;
       }
 
-      body.fullscreen-game .clock div.active {
+      body.fullscreen-game .clock div.active ,
+      body.tournament-board-max .clock div.active  {
         border-color: var(--accent) !important;
         background: linear-gradient(135deg, #3a2e12, #6b531a) !important;
         color: #ffeaad !important;
         box-shadow: 0 0 30px rgba(242, 184, 75, 0.4) !important;
       }
 
-      body.fullscreen-game .clock-player-name {
+      body.fullscreen-game .clock-player-name ,
+      body.tournament-board-max .clock-player-name  {
         font-size: clamp(0.65rem, 1.6vh, 0.85rem) !important;
         letter-spacing: normal !important;
         color: rgba(255, 255, 255, 0.75) !important;
         text-shadow: none !important;
       }
 
-      body.fullscreen-game .clock div.active .clock-player-name {
+      body.fullscreen-game .clock div.active .clock-player-name ,
+      body.tournament-board-max .clock div.active .clock-player-name  {
         color: #ffeaad !important;
       }
 
@@ -930,7 +952,8 @@
          los controles. El tamaño exacto (cuadrado, sin recortes) lo
          calcula JS con precisión en cada resize/orientationchange,
          estas reglas son el respaldo si JS no llegó a correr aún */
-      body.fullscreen-game .board-frame {
+      body.fullscreen-game .board-frame ,
+      body.tournament-board-max .board-frame  {
         flex: 0 0 auto;
         min-height: 0;
         min-width: 0;
@@ -959,7 +982,8 @@
         box-sizing: border-box;
       }
 
-      body.fullscreen-game .board {
+      body.fullscreen-game .board ,
+      body.tournament-board-max .board  {
         width: 100% !important;
         height: 100% !important;
         max-width: 100% !important;
@@ -971,7 +995,8 @@
 
       /* Controles: parte del flujo normal (ya no position:fixed),
          así nunca se superponen al tablero ni quedan cortados */
-      body.fullscreen-game .controls-panel {
+      body.fullscreen-game .controls-panel ,
+      body.tournament-board-max .controls-panel  {
         position: static !important;
         flex: 0 0 auto !important;
         display: flex !important;
@@ -988,20 +1013,34 @@
         max-width: 100%;
       }
 
-      body.fullscreen-game .controls-panel .btn {
+      body.fullscreen-game .controls-panel .btn ,
+      body.tournament-board-max .controls-panel .btn  {
         padding: 8px 12px;
         font-size: 0.85rem;
         min-width: auto;
       }
 
+      /* Monitores grandes / proyector de torneo: el cálculo de JS ya
+         usa el alto y ancho reales disponibles, así que en pantallas
+         muy anchas el tablero puede crecer más allá del 92vw por
+         defecto sin quedar gigante en celulares ni tablets. */
+      @media (min-width: 1400px) {
+        body.tournament-board-max .board-frame {
+          width: min(78vh, calc(100dvh - 190px));
+          height: min(78vh, calc(100dvh - 190px));
+        }
+      }
+
       /* Pantallas muy bajas (celular en horizontal): reloj y
          controles más compactos para no robarle aire al tablero */
       @media (max-height: 480px) {
-        body.fullscreen-game .clock div {
+        body.fullscreen-game .clock div ,
+        body.tournament-board-max .clock div  {
           font-size: 1rem !important;
           padding: 5px 10px !important;
         }
-        body.fullscreen-game .controls-panel .btn {
+        body.fullscreen-game .controls-panel .btn ,
+        body.tournament-board-max .controls-panel .btn  {
           padding: 6px 10px;
           font-size: 0.78rem;
         }
@@ -1588,11 +1627,13 @@
           width: 100%;
           min-width: 0;
         }
-        body.fullscreen-game .controls-panel {
+        body.fullscreen-game .controls-panel ,
+        body.tournament-board-max .controls-panel  {
           display: flex;
           width: auto;
         }
-        body.fullscreen-game .controls-panel .btn {
+        body.fullscreen-game .controls-panel .btn ,
+        body.tournament-board-max .controls-panel .btn  {
           width: auto;
         }
       }
