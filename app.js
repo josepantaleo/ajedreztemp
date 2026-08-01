@@ -8091,7 +8091,7 @@
           }
 
           subscribeMatchChat(round, board);
-          subscribeCallSignaling(round, board);
+          if (tournamentMyColor()) subscribeCallSignaling(round, board);
           renderCallUI();
 
           render();
