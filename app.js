@@ -16,6 +16,35 @@
       // producción; para reactivarla al depurar, poner esto en true.
       const PERF_DEBUG = false;
 
+      // =========================
+      // FEEDBACK TÁCTIL (sin el flash gris de Android/Chrome)
+      // =========================
+      // Android/Chrome pinta un "tap highlight" gris por defecto sobre
+      // cualquier elemento tocable. Lo apagamos globalmente y lo
+      // reemplazamos por un feedback propio (un breve "hundido": escala +
+      // opacidad) para que el toque se siga sintiendo, en vez de
+      // desaparecer sin más. Se inyecta una sola vez, al cargar el script.
+      (function injectTapFeedbackStyles_() {
+        const style = document.createElement("style");
+        style.textContent = `
+          html, *, *::before, *::after {
+            -webkit-tap-highlight-color: transparent;
+          }
+          button, .btn, a, [role="button"], .avatar-bubble, .avatar-option {
+            touch-action: manipulation;
+          }
+          button:active,
+          .btn:active,
+          .avatar-option:active,
+          .avatar-bubble:active {
+            transform: scale(0.96);
+            opacity: 0.85;
+            transition: transform 0.08s ease-out, opacity 0.08s ease-out;
+          }
+        `;
+        document.head.appendChild(style);
+      })();
+
       const PIECES = {
         wK: "♔", wQ: "♕", wR: "♖", wB: "♗", wN: "♘", wP: "♙",
         bK: "♚", bQ: "♛", bR: "♜", bB: "♝", bN: "♞", bP: "♟"
@@ -1596,12 +1625,15 @@
       }
 
       function clonePosition(g) {
-        // Objeto simple para snapshots de análisis
+        // Snapshot liviano para el visor de análisis: el FEN ya contiene
+        // toda la información de la posición (tablero, turno, enroques,
+        // al paso), así que no hace falta guardar también un array 8x8
+        // de piezas por cada jugada. Antes esto multiplicaba por ~64 el
+        // tamaño de cada posición guardada; con hasta 30 partidas y ~80
+        // jugadas cada una, eso se releía y reescribía entero en cada
+        // save()/loadState(). El tablero se reconstruye al vuelo (ver
+        // renderAnalysisBoard) solo para la jugada que se está mirando.
         return {
-          board: g.board(),
-          turn: g.turn(),
-          castling: {},
-          enPassant: null,
           fen: g.fen(),
         };
       }
@@ -2482,7 +2514,7 @@
         const accSums = { w: [], b: [] };
 
         for (let i = 0; i < record.moves.length; i++) {
-          const color = positions[i].turn; // quién mueve en esta jugada
+          const color = positions[i].fen.split(" ")[1]; // quién mueve en esta jugada
           const scoreBefore = scores[i];
           const scoreAfter = scores[i + 1];
           // ambos "scores" están en perspectiva de quien mueve en esa posición;
@@ -2574,7 +2606,7 @@
 
         scores.forEach((rawScore, i) => {
           // convertir a perspectiva de blancas para el gráfico
-          const turnAt = record.positions[i].turn;
+          const turnAt = record.positions[i].fen.split(" ")[1];
           const whiteScore = turnAt === "w" ? rawScore : -rawScore;
           const clamped = Math.max(-600, Math.min(600, whiteScore));
           const pct = 50 + (clamped / 600) * 50; // 0 (negras dominan) .. 100 (blancas dominan)
@@ -2593,13 +2625,14 @@
         const boardEl = document.getElementById("analysis-board");
         boardEl.innerHTML = "";
         const pos = record.positions[analysisPly];
-        if (!pos || !pos.board) return;
+        if (!pos || !pos.fen) return;
+        const board = new Chess(pos.fen).board();
 
         for (let r = 0; r < 8; r++) {
           for (let c = 0; c < 8; c++) {
             const sq = document.createElement("div");
             sq.className = "square " + ((r + c) % 2 ? "dark" : "light");
-            const p = pos.board[r][c];
+            const p = board[r][c];
             if (p) {
               const piece = document.createElement("div");
               piece.className = "piece " + (p.color === "w" ? "white-piece" : "black-piece");
@@ -2615,7 +2648,7 @@
         const a = record.analysis;
         if (a && evalEl) {
           const rawScore = a.scores[analysisPly];
-          const turnAt = pos.turn;
+          const turnAt = pos.fen.split(" ")[1];
           const whiteScore = turnAt === "w" ? rawScore : -rawScore;
           let text;
           if (Math.abs(whiteScore) >= MATE_SCORE - 300) {
