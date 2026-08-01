@@ -81,9 +81,11 @@
             border: 2px solid rgba(255,255,255,.6);
             vertical-align: middle; margin-right: 8px;
             user-select: none; flex-shrink: 0;
+            transition: transform 0.15s ease-out;
           }
           .avatar-bubble.large { width: 54px; height: 54px; font-size: 28px; }
           .avatar-bubble.static { animation: none !important; }
+          .avatar-bubble:hover { transform: scale(1.08); }
           @keyframes avatar-bounce { 0%,100%{transform:translateY(0)} 50%{transform:translateY(-4px)} }
           @keyframes avatar-wiggle { 0%,100%{transform:rotate(-8deg)} 50%{transform:rotate(8deg)} }
           @keyframes avatar-pulse  { 0%,100%{transform:scale(1)} 50%{transform:scale(1.12)} }
@@ -96,13 +98,28 @@
           .avatar-tilt   { animation: avatar-tilt 1.6s ease-in-out infinite; }
           .avatar-spin   { animation: avatar-spin 3.2s linear infinite; }
           .avatar-nod    { animation: avatar-nod 1.2s ease-in-out infinite; }
+          /* Quien tenga activado "reducir movimiento" en su sistema no
+             tiene por qué ver 6 mascotas dando vueltas sin parar en cada
+             pantalla; se les congela la pose (sin perder el color/forma
+             que identifica a cada una). */
+          @media (prefers-reduced-motion: reduce) {
+            .avatar-bounce, .avatar-wiggle, .avatar-pulse,
+            .avatar-tilt, .avatar-spin, .avatar-nod { animation: none; }
+            .avatar-bubble:hover { transform: none; }
+          }
           #avatar-picker-backdrop {
             position: fixed; inset: 0; background: rgba(0,0,0,.55);
             display: flex; align-items: center; justify-content: center;
             z-index: 9999;
           }
+          /* Antes en colores fijos (#1e1e2e / #fff), lo que dejaba el
+             modal desentonando si la app tiene o suma un tema claro. Usa
+             las mismas variables que ya define el resto de la app
+             (--surface/--text), con el valor anterior como fallback por
+             si este archivo se usa suelto sin ese tema. */
           #avatar-picker-box {
-            background: #1e1e2e; color: #fff; padding: 20px; border-radius: 14px;
+            background: var(--surface, #1e1e2e); color: var(--text, #fff);
+            padding: 20px; border-radius: 14px;
             max-width: 320px; width: 90%; text-align: center;
             box-shadow: 0 10px 30px rgba(0,0,0,.4);
           }
@@ -115,12 +132,28 @@
             display: flex; flex-direction: column; align-items: center; gap: 6px;
             padding: 8px 4px; border-radius: 10px; cursor: pointer;
             border: 2px solid transparent;
+            transition: background-color 0.15s ease-out, border-color 0.15s ease-out;
           }
-          .avatar-option.selected { border-color: #fff; background: rgba(255,255,255,.08); }
+          .avatar-option:hover { background: var(--surface2, rgba(255,255,255,.08)); }
+          .avatar-option.selected { border-color: var(--accent, #fff); background: var(--surface2, rgba(255,255,255,.08)); }
+          /* Las opciones ahora llevan tabindex/role="button" (ver
+             openAvatarPicker), así que necesitan un foco visible propio
+             para quien navega con teclado; antes no había forma de saber
+             cuál estaba seleccionada sin mouse. */
+          .avatar-option:focus-visible {
+            outline: 2px solid var(--accent, #fff);
+            outline-offset: 2px;
+          }
           .avatar-option span.opt-label { font-size: 11px; opacity: .85; }
           #avatar-picker-close {
-            background: #444; color: #fff; border: none; border-radius: 8px;
+            background: var(--surface2, #444); color: var(--text, #fff); border: none; border-radius: 8px;
             padding: 8px 16px; cursor: pointer; font-size: 13px;
+            transition: filter 0.15s ease-out;
+          }
+          #avatar-picker-close:hover { filter: brightness(1.15); }
+          #avatar-picker-close:focus-visible {
+            outline: 2px solid var(--accent, #fff);
+            outline-offset: 2px;
           }
         `;
         document.head.appendChild(style);
@@ -176,7 +209,7 @@
         const options = Object.keys(AVATAR_MASCOTS).map((id) => {
           const sel = id === current ? " selected" : "";
           return `
-            <div class="avatar-option${sel}" data-avatar="${id}">
+            <div class="avatar-option${sel}" data-avatar="${id}" tabindex="0" role="button" aria-pressed="${id === current}" aria-label="${escapeHtml_(AVATAR_MASCOTS[id].label)}">
               ${avatarBubbleHTML_(id, { large: true })}
               <span class="opt-label">${escapeHtml_(AVATAR_MASCOTS[id].label)}</span>
             </div>`;
@@ -191,22 +224,38 @@
         backdrop.addEventListener("click", (e) => {
           if (e.target === backdrop) closeAvatarPicker_();
         });
+        document.addEventListener("keydown", handleAvatarPickerEscape_);
+        const chooseAvatar = (opt) => {
+          state.avatar = opt.dataset.avatar;
+          save();
+          renderMiniAvatar();
+          renderBoardAvatars_();
+          closeAvatarPicker_();
+          toast("✓ Mascota actualizada");
+        };
         backdrop.querySelectorAll(".avatar-option").forEach((opt) => {
-          opt.addEventListener("click", () => {
-            state.avatar = opt.dataset.avatar;
-            save();
-            renderMiniAvatar();
-            renderBoardAvatars_();
-            closeAvatarPicker_();
-            toast("✓ Mascota actualizada");
+          opt.addEventListener("click", () => chooseAvatar(opt));
+          // Con tabindex/role="button" recién agregados, el div responde
+          // a Enter/Espacio como cualquier botón nativo (antes ni
+          // siquiera se podía llegar acá con el teclado).
+          opt.addEventListener("keydown", (e) => {
+            if (e.key === "Enter" || e.key === " ") {
+              e.preventDefault();
+              chooseAvatar(opt);
+            }
           });
         });
         document.getElementById("avatar-picker-close").addEventListener("click", closeAvatarPicker_);
       }
 
+      function handleAvatarPickerEscape_(e) {
+        if (e.key === "Escape") closeAvatarPicker_();
+      }
+
       function closeAvatarPicker_() {
         const el = document.getElementById("avatar-picker-backdrop");
         if (el) el.remove();
+        document.removeEventListener("keydown", handleAvatarPickerEscape_);
       }
 
       const DEFAULT_STATE = {
