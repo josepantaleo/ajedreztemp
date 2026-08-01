@@ -980,6 +980,13 @@
               const square = document.createElement("div");
               square.className = "square " + ((r + c) % 2 ? "dark" : "light");
               square.dataset.square = sqName;
+              // Sin esto, el navegador espera ~300ms después de un tap para
+              // descartar un posible doble-tap-para-zoom antes de disparar
+              // "click" (retraso clásico de touch en mobile). El arrastre de
+              // piezas ya es instantáneo porque usa pointerdown/pointermove
+              // directamente, pero un simple toque para seleccionar/mover
+              // una casilla dependía de ese "click" con delay. Esto lo saca.
+              square.style.touchAction = "manipulation";
 
               if (c === (isFlipped ? 7 : 0)) {
                 const rank = document.createElement("span");
@@ -1043,6 +1050,7 @@
             pieceEl.className = "piece " + (pieceObj.color === "w" ? "white-piece" : "black-piece");
             pieceEl.textContent = PIECES[pieceObj.color + pieceObj.type.toUpperCase()];
             pieceEl.dataset.piece = pieceObj.type.toUpperCase();
+            pieceEl.style.touchAction = "manipulation";
             square.appendChild(pieceEl);
             attachPieceDrag(pieceEl, sqName);
             if (justMovedAnim && justMovedAnim.to === sqName) {
