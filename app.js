@@ -356,6 +356,7 @@
       const SoundFX = (() => {
         let ctx = null;
         let enabled = true;
+        let ringInterval = null; // setInterval activo del ringtone de llamada (entrante/saliente), o null si no está sonando
 
         function ensureCtx() {
           if (!ctx) {
@@ -474,6 +475,27 @@
             tone(659, 0.1, 0.1, { type: "triangle", gain: 0.14 });
             tone(784, 0.2, 0.1, { type: "triangle", gain: 0.14 });
             tone(1047, 0.3, 0.28, { type: "triangle", gain: 0.17 });
+          },
+          // Ringtone de llamada de audio (torneo): un patrón de dos tonos tipo
+          // "ring-ring" que se repite cada 2s hasta llamar a stopRing(). Sirve
+          // tanto para el que llama (esperando que atiendan) como para el que
+          // recibe la llamada entrante; se corta en cuanto se atiende, se
+          // rechaza o se cuelga.
+          startRing() {
+            if (ringInterval) return; // ya está sonando, no duplicar
+            const ringPattern = () => {
+              if (!enabled) return;
+              tone(1000, 0, 0.35, { type: "sine", gain: 0.15 });
+              tone(1000, 0.45, 0.35, { type: "sine", gain: 0.15 });
+            };
+            ringPattern();
+            ringInterval = setInterval(ringPattern, 2000);
+          },
+          stopRing() {
+            if (ringInterval) {
+              clearInterval(ringInterval);
+              ringInterval = null;
+            }
           },
         };
         return fx;
@@ -4409,6 +4431,7 @@
       // tanto al cortar una llamada propia como al detectar que el rival ya
       // cortó/canceló/rechazó del otro lado.
       function teardownCallLocal_() {
+        SoundFX.stopRing();
         if (callPc) {
           callPc.onicecandidate = null;
           callPc.ontrack = null;
@@ -4462,6 +4485,7 @@
         }
         callState = "outgoing";
         renderCallUI();
+        SoundFX.startRing();
 
         callPc = newCallPeerConnection_();
         callLocalStream.getTracks().forEach((track) => callPc.addTrack(track, callLocalStream));
@@ -4529,6 +4553,7 @@
         listenRemoteCandidates_(round, board, "offerCandidates");
         callState = "active";
         renderCallUI();
+        SoundFX.stopRing();
       }
 
       async function declineIncomingCall_() {
@@ -4603,10 +4628,12 @@
               callState = "incoming";
               callPendingOffer = data.offer;
               renderCallUI();
+              SoundFX.startRing();
             } else if (data.status === "active" && iAmCaller && data.answer && callPc && !callPc.currentRemoteDescription) {
               callPc.setRemoteDescription(new RTCSessionDescription(data.answer)).catch(() => {});
               callState = "active";
               renderCallUI();
+              SoundFX.stopRing(); // el rival atendió: corta el ring-back del que llamaba
             }
           },
           () => {
