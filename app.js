@@ -570,7 +570,16 @@
           }
         }
       }
-      initStockfishWorker();
+      // El worker de Stockfish (motor contra la IA) ya NO se arranca acá al
+      // cargar la página: eso descargaba y ponía en marcha el motor
+      // (WASM/JS pesado desde CDN) en TODAS las pantallas, incluidas
+      // partidas de torneo online o "pasar y jugar" donde nunca se usa. Se
+      // inicializa una sola vez, de forma perezosa, la primera vez que
+      // realmente hace falta (ver ensureStockfishWorker(), llamada al
+      // activar el modo "vs IA" y antes de pedirle una jugada al bot).
+      function ensureStockfishWorker() {
+        if (!sfWorker) initStockfishWorker();
+      }
 
       function getStockfishSkill(difficulty) {
         switch(difficulty) {
@@ -612,6 +621,7 @@
           return;
         }
         if (!botEnabled || !gameStarted || game.game_over() || game.turn() !== botColor) return;
+        ensureStockfishWorker();
         botThinking = true;
         render();
 
@@ -2033,6 +2043,7 @@
       document.getElementById("new-game").onclick = () => {
         const modeValue = document.getElementById("mode").value;
         botEnabled = modeValue === "bot";
+        if (botEnabled) ensureStockfishWorker();
         botDifficulty = document.getElementById("bot-difficulty").value;
         const humanColor = document.getElementById("bot-color").value;
         botColor = humanColor === 'w' ? 'b' : 'w';
