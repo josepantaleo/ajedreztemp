@@ -271,6 +271,12 @@
         .theme-grid {
           grid-template-columns: 1fr;
         }
+        /* Formulario de inscripción al torneo: en mobile el botón ocupa
+           todo el ancho (mismo ancho que el input de arriba) en vez de
+           quedar chico pegado al texto, más fácil de tocar */
+        #tournament-self-register-btn {
+          width: 100%;
+        }
       }
 
       button,
@@ -948,6 +954,29 @@
         color: #ffeaad !important;
       }
 
+      /* Orden visual en pantalla completa: reloj arriba, tablero enseguida
+         (lo más grande posible), y TODOS los botones —tanto los del
+         torneo (volver/tablas/abandonar/chat/llamada) como los del juego
+         (jugadas legales/salir)— agrupados al final, en una sola fila.
+         El DOM no cambia (así no se rompe ningún listener de JS), solo el
+         orden visual con flexbox. */
+      body.fullscreen-game .clock ,
+      body.tournament-board-max .clock  {
+        order: 1;
+      }
+      body.fullscreen-game .board-frame ,
+      body.tournament-board-max .board-frame  {
+        order: 2;
+      }
+      body.fullscreen-game #tournament-match-bar ,
+      body.tournament-board-max #tournament-match-bar  {
+        order: 3;
+      }
+      body.fullscreen-game .controls-panel ,
+      body.tournament-board-max .controls-panel  {
+        order: 4;
+      }
+
       /* El tablero ocupa todo el espacio disponible entre el reloj y
          los controles. El tamaño exacto (cuadrado, sin recortes) lo
          calcula JS con precisión en cada resize/orientationchange,
@@ -1018,6 +1047,127 @@
         padding: 8px 12px;
         font-size: 0.85rem;
         min-width: auto;
+      }
+
+      /* Barra de partida de torneo (volver, tablas/abandonar, chat,
+         llamada): en vez de quedar arriba como bloque aparte con título y
+         texto, acá se convierte en una fila más de botones compactos —
+         mismo estilo visual que .controls-panel— para que el tablero se
+         quede con todo el espacio posible. El título y el estado en texto
+         se ocultan porque esa info ya se ve sobre el reloj (nombres de
+         cada jugador) y en la barra de estado normal fuera de pantalla
+         completa. */
+      body.fullscreen-game #tournament-match-bar ,
+      body.tournament-board-max #tournament-match-bar  {
+        flex: 0 0 auto !important;
+        display: flex !important;
+        flex-wrap: wrap !important;
+        align-items: center !important;
+        justify-content: center !important;
+        gap: 8px !important;
+        width: auto !important;
+        max-width: 100% !important;
+        margin: 0 !important;
+        padding: 8px 14px !important;
+        background: rgba(8, 16, 32, 0.85) !important;
+        border: 1px solid rgba(92, 200, 255, 0.25) !important;
+        border-radius: 20px !important;
+        backdrop-filter: blur(16px) !important;
+        box-shadow: 0 20px 50px rgba(0, 0, 0, 0.5) !important;
+        z-index: 60 !important;
+        box-sizing: border-box !important;
+      }
+
+      /* "Desarma" el div contenedor de título+volver: sus hijos (título,
+         que se oculta, y el botón "Volver") pasan a ser ítems directos de
+         la fila de abajo, junto al resto de los botones. */
+      body.fullscreen-game #tournament-match-bar > div:first-child ,
+      body.tournament-board-max #tournament-match-bar > div:first-child  {
+        display: contents !important;
+      }
+
+      body.fullscreen-game #tournament-match-title ,
+      body.tournament-board-max #tournament-match-title ,
+      body.fullscreen-game #tournament-match-status ,
+      body.tournament-board-max #tournament-match-status  {
+        display: none !important;
+      }
+
+      body.fullscreen-game #tournament-match-spectator-note ,
+      body.tournament-board-max #tournament-match-spectator-note  {
+        flex: 0 0 100%;
+        margin: 0 !important;
+        font-size: 0.7rem !important;
+        text-align: center;
+      }
+
+      /* Botones (volver / tablas / abandonar / chat / llamada), mismo
+         tamaño compacto que los botones de .controls-panel */
+      body.fullscreen-game #tournament-match-bar .btn ,
+      body.tournament-board-max #tournament-match-bar .btn  {
+        padding: 6px 10px !important;
+        font-size: 0.75rem !important;
+        min-width: auto !important;
+        min-height: 34px !important;
+      }
+
+      body.fullscreen-game #tournament-match-controls ,
+      body.tournament-board-max #tournament-match-controls  {
+        margin: 0 !important;
+        gap: 6px !important;
+      }
+
+      /* Chat: el botón entra en la fila; el panel, al abrirse, flota por
+         encima en vez de empujar la fila hacia abajo (así el tamaño del
+         tablero, ya calculado por JS, no queda desactualizado al abrir o
+         cerrar el chat). */
+      body.fullscreen-game #tournament-match-chat ,
+      body.tournament-board-max #tournament-match-chat  {
+        display: inline-flex !important;
+        margin: 0 !important;
+        position: relative;
+      }
+
+      body.fullscreen-game #tournament-match-chat-panel ,
+      body.tournament-board-max #tournament-match-chat-panel  {
+        position: absolute !important;
+        bottom: calc(100% + 10px) !important;
+        left: 50% !important;
+        transform: translateX(-50%) !important;
+        width: min(90vw, 320px) !important;
+        max-height: 40vh !important;
+        font-size: 0.78rem !important;
+        z-index: 70 !important;
+      }
+
+      /* Llamada de audio: el botón/estado entra en la fila igual que el
+         resto */
+      body.fullscreen-game #tournament-match-call ,
+      body.tournament-board-max #tournament-match-call  {
+        display: inline-flex !important;
+        margin: 0 !important;
+      }
+
+      body.fullscreen-game #tournament-match-call > div ,
+      body.tournament-board-max #tournament-match-call > div  {
+        font-size: 0.72rem !important;
+        gap: 6px !important;
+      }
+
+      body.fullscreen-game #tournament-match-call-note ,
+      body.tournament-board-max #tournament-match-call-note  {
+        display: none !important; /* texto informativo, no crítico: se saca para ahorrar espacio */
+      }
+
+      @media (max-height: 480px) {
+        body.fullscreen-game #tournament-match-bar ,
+        body.tournament-board-max #tournament-match-bar  {
+          padding: 5px 10px !important;
+        }
+        body.fullscreen-game #tournament-match-spectator-note ,
+        body.tournament-board-max #tournament-match-spectator-note  {
+          display: none !important; /* en celular horizontal, solo botones */
+        }
       }
 
       /* Monitores grandes / proyector de torneo: el cálculo de JS ya
