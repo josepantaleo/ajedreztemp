@@ -1020,6 +1020,104 @@
         min-width: auto;
       }
 
+      /* Barra de partida de torneo (título, volver, tablas/abandonar, chat,
+         llamada de audio): sigue visible en pantalla completa porque el
+         jugador la necesita durante la partida, pero en la vista normal
+         está pensada para ocupar todo el ancho de la tarjeta, con botones y
+         texto a tamaño completo. Acá se compacta y se reparte en filas más
+         chicas para que le robe el mínimo espacio posible al tablero
+         (el alto real ya lo descuenta sizeFullscreenBoard en JS, así que
+         cuanto más chica quede esta barra, más grande sale el tablero). */
+      body.fullscreen-game #tournament-match-bar ,
+      body.tournament-board-max #tournament-match-bar  {
+        flex: 0 0 auto !important;
+        width: min(94vw, 520px) !important;
+        max-width: 100% !important;
+        margin: 0 !important;
+        padding: clamp(6px, 1vh, 10px) clamp(10px, 2vw, 16px) !important;
+        background: rgba(8, 16, 32, 0.85) !important;
+        border: 1px solid rgba(92, 200, 255, 0.25) !important;
+        border-radius: 16px !important;
+        backdrop-filter: blur(14px) !important;
+        box-shadow: 0 15px 35px rgba(0, 0, 0, 0.4) !important;
+        z-index: 60 !important;
+        box-sizing: border-box !important;
+      }
+
+      body.fullscreen-game #tournament-match-title ,
+      body.tournament-board-max #tournament-match-title  {
+        font-size: clamp(0.72rem, 1.6vh, 0.9rem) !important;
+      }
+
+      body.fullscreen-game #tournament-match-status ,
+      body.tournament-board-max #tournament-match-status  {
+        font-size: clamp(0.62rem, 1.3vh, 0.76rem) !important;
+        margin: 2px 0 0 !important;
+      }
+
+      body.fullscreen-game #tournament-match-spectator-note ,
+      body.tournament-board-max #tournament-match-spectator-note  {
+        margin-top: 8px !important;
+        font-size: 0.72rem !important;
+      }
+
+      /* Botones (volver / tablas / abandonar / chat / llamada) más chicos
+         y sin obligar a que cada bloque ocupe una fila entera */
+      body.fullscreen-game #tournament-match-bar .btn ,
+      body.tournament-board-max #tournament-match-bar .btn  {
+        padding: 5px 10px !important;
+        font-size: 0.7rem !important;
+        min-width: auto !important;
+      }
+
+      body.fullscreen-game #tournament-match-controls ,
+      body.tournament-board-max #tournament-match-controls  {
+        margin-top: 8px !important;
+        gap: 6px !important;
+      }
+
+      /* Chat y llamada, uno al lado del otro en vez de apilados, para no
+         alargar la barra hacia abajo */
+      body.fullscreen-game #tournament-match-chat ,
+      body.tournament-board-max #tournament-match-chat ,
+      body.fullscreen-game #tournament-match-call ,
+      body.tournament-board-max #tournament-match-call  {
+        display: inline-flex !important;
+        flex-direction: column;
+        vertical-align: top;
+        margin: 8px 8px 0 0 !important;
+      }
+
+      body.fullscreen-game #tournament-match-chat-panel ,
+      body.tournament-board-max #tournament-match-chat-panel  {
+        max-height: 26vh !important;
+        font-size: 0.78rem !important;
+      }
+
+      body.fullscreen-game #tournament-match-call > div ,
+      body.tournament-board-max #tournament-match-call > div  {
+        font-size: 0.72rem !important;
+        gap: 6px !important;
+      }
+
+      body.fullscreen-game #tournament-match-call-note ,
+      body.tournament-board-max #tournament-match-call-note  {
+        display: none !important; /* texto informativo, no crítico: se saca para ahorrar espacio */
+      }
+
+      @media (max-height: 480px) {
+        body.fullscreen-game #tournament-match-bar ,
+        body.tournament-board-max #tournament-match-bar  {
+          padding: 5px 10px !important;
+        }
+        body.fullscreen-game #tournament-match-status ,
+        body.tournament-board-max #tournament-match-status ,
+        body.fullscreen-game #tournament-match-spectator-note ,
+        body.tournament-board-max #tournament-match-spectator-note  {
+          display: none !important; /* en celular horizontal, solo título y botones */
+        }
+      }
+
       /* Monitores grandes / proyector de torneo: el cálculo de JS ya
          usa el alto y ancho reales disponibles, así que en pantallas
          muy anchas el tablero puede crecer más allá del 92vw por
