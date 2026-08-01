@@ -4196,7 +4196,11 @@
         return gamesCollectionRef.doc(gameDocId_(round, board)).collection("chat");
       }
 
-      // Suscribe al chat de la mesa (round, board) actualmente abierta.
+      // Suscribe al chat de la mesa (round, board) actualmente abierta. Es
+      // exclusivo de los dos rivales de esa mesa (igual que la llamada de
+      // audio, ver renderCallUI): un espectador ni siquiera se suscribe, así
+      // no lee ni gasta lecturas de Firestore en una conversación que no le
+      // corresponde.
       // Se guardan como mucho los últimos 200 mensajes en memoria (más que
       // suficiente para una partida) para no dejar crecer el DOM sin límite
       // en partidas muy charlatanas.
@@ -4207,6 +4211,7 @@
         matchChatPanelOpen = false;
         matchChatFirstSnapshot = true;
         renderMatchChat();
+        if (!tournamentMyColor()) return; // espectador: sin chat
         matchChatUnsub = matchChatCollectionRef_(round, board)
           .orderBy("at", "asc")
           .limitToLast(200)
@@ -4283,11 +4288,15 @@
 
         const myColor = tournamentMyColor();
         const canChat = !!myColor;
-        wrapEl.style.display = tournamentMatchActive ? "" : "none";
-        if (inputRow) inputRow.style.display = canChat ? "" : "none";
-        if (noteEl) noteEl.textContent = canChat ? "" : "Como espectador podés leer el chat, pero no escribir.";
+        // El chat es exclusivo entre los dos rivales de la mesa (igual que
+        // la llamada de audio): un espectador no lo ve, ni siquiera en
+        // solo-lectura.
+        wrapEl.style.display = tournamentMatchActive && canChat ? "" : "none";
+        if (!canChat) return;
+        if (inputRow) inputRow.style.display = "";
+        if (noteEl) noteEl.textContent = "";
         if (clearBtn) {
-          clearBtn.style.display = canChat && matchChatMessages.length ? "" : "none";
+          clearBtn.style.display = matchChatMessages.length ? "" : "none";
         }
         renderMatchChatMuteBtn_();
 
