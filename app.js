@@ -4605,7 +4605,7 @@
       // Cualquiera de los dos jugadores puede hacerlo; los espectadores no
       // tienen el botón visible (ver canChat en renderMatchChat).
       async function clearMatchChat() {
-        if (!tournamentMatchCtx) return;
+        if (!tournamentMatchCtx || !tournamentMyColor()) return;
         if (!matchChatMessages.length) return;
         if (!confirm("¿Vaciar el chat de esta mesa? Se borran los mensajes para los dos jugadores y no se puede deshacer.")) {
           return;
@@ -4716,9 +4716,12 @@
         return pc;
       }
 
-      // Quien inicia la llamada.
+      // Quien inicia la llamada. Solo los dos rivales de la mesa pueden
+      // hacerlo (el botón ya está oculto para espectadores en renderCallUI,
+      // pero este chequeo evita que alguien la dispare igual desde la
+      // consola del navegador).
       async function startAudioCall() {
-        if (!tournamentMatchCtx || callState !== "idle") return;
+        if (!tournamentMatchCtx || callState !== "idle" || !tournamentMyColor()) return;
         const round = tournamentMatchCtx.round;
         const board = tournamentMatchCtx.board;
         try {
@@ -4759,9 +4762,11 @@
         listenRemoteCandidates_(round, board, "answerCandidates");
       }
 
-      // Quien atiende una llamada entrante.
+      // Quien atiende una llamada entrante. Mismo motivo que en
+      // startAudioCall: el chequeo de tournamentMyColor() no depende solo
+      // de que el botón esté oculto para espectadores.
       async function acceptIncomingCall_(offer) {
-        if (!tournamentMatchCtx) return;
+        if (!tournamentMatchCtx || !tournamentMyColor()) return;
         const round = tournamentMatchCtx.round;
         const board = tournamentMatchCtx.board;
         try {
