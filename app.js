@@ -2200,6 +2200,90 @@
         });
       }
 
+      // "Exportar datos" / "Importar datos": antes ninguno de los dos
+      // botones tenía código detrás (no hacían nada). El respaldo incluye
+      // el state completo (perfil, XP, historial, avatar) MÁS las
+      // preferencias que se guardan aparte en localStorage (tema, fichas,
+      // los 4 toggles de ayudas/sonido y el silenciado de chat), para que
+      // "exportar" sea de verdad una copia completa de todo lo que la app
+      // recuerda de este alumno en este navegador. Deliberadamente NO
+      // incluye la config de Firebase ni la sala del torneo: eso es
+      // configuración de la escuela, no datos del alumno.
+      const BACKUP_KEYS = [
+        "chessSchoolData",
+        "chessTheme",
+        "chessPieceStyle",
+        "chessShowLegalMoves",
+        "chessShowThreats",
+        "chessExplainMode",
+        "chessSoundEnabled",
+        "chessMatchChatMuted",
+      ];
+
+      const exportJsonBtn = document.getElementById("export-json");
+      if (exportJsonBtn) {
+        exportJsonBtn.addEventListener("click", () => {
+          const backup = { app: "escuela-de-ajedrez", version: 1, exportedAt: new Date().toISOString(), data: {} };
+          BACKUP_KEYS.forEach((key) => {
+            const value = localStorage.getItem(key);
+            if (value !== null) backup.data[key] = value;
+          });
+          const blob = new Blob([JSON.stringify(backup, null, 2)], { type: "application/json" });
+          const url = URL.createObjectURL(blob);
+          const safeName = (state.name || "alumno").toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/(^-+|-+$)/g, "") || "alumno";
+          const dateStr = new Date().toISOString().slice(0, 10);
+          const a = document.createElement("a");
+          a.href = url;
+          a.download = `ajedrez-${safeName}-${dateStr}.json`;
+          document.body.appendChild(a);
+          a.click();
+          a.remove();
+          URL.revokeObjectURL(url);
+          toast("📤 Datos exportados");
+        });
+      }
+
+      const importJsonInput = document.getElementById("import-json");
+      if (importJsonInput) {
+        importJsonInput.addEventListener("change", (e) => {
+          const file = e.target.files && e.target.files[0];
+          if (!file) return;
+          const reader = new FileReader();
+          reader.onload = () => {
+            let parsed;
+            try {
+              parsed = JSON.parse(reader.result);
+            } catch (err) {
+              toast("❌ Ese archivo no es un JSON válido");
+              importJsonInput.value = "";
+              return;
+            }
+            const payload = parsed && parsed.data && typeof parsed.data === "object" ? parsed.data : null;
+            if (!payload || !payload.chessSchoolData) {
+              toast("❌ Ese archivo no parece un respaldo de esta app");
+              importJsonInput.value = "";
+              return;
+            }
+            if (!confirm("¿Importar este respaldo? Se reemplaza tu progreso, perfil y preferencias actuales por los del archivo. No se puede deshacer.")) {
+              importJsonInput.value = "";
+              return;
+            }
+            BACKUP_KEYS.forEach((key) => {
+              if (typeof payload[key] === "string") localStorage.setItem(key, payload[key]);
+            });
+            importJsonInput.value = "";
+            toast("📥 Datos importados. Recargando…");
+            // Recargamos en vez de resincronizar a mano cada variable en
+            // memoria (tema, fichas, los 4 toggles, state...): son muchas
+            // y están repartidas por todo el archivo, así que recargar es
+            // la forma más simple y segura de que todo quede consistente.
+            setTimeout(() => location.reload(), 700);
+          };
+          reader.onerror = () => toast("❌ No se pudo leer el archivo");
+          reader.readAsText(file);
+        });
+      }
+
       // "Borrar progreso": antes el botón no tenía ningún handler y no
       // borraba nada. Ahora sí resetea XP, historial y estadísticas,
       // conservando nombre/curso/avatar (eso es "perfil", no "progreso").
@@ -4384,6 +4468,86 @@
         return gamesCollectionRef.doc(gameDocId_(round, board)).collection("chat");
       }
 
+      // --- Anuncios del torneo (mensaje del árbitro/admin para todos los
+      // conectados, sin depender de ninguna mesa) ---
+      // A diferencia del chat de mesa (privado entre dos rivales), esto vive
+      // en una subcolección propia del documento raíz del torneo
+      // (torneos/{room}/announcements), separada de "games" para no competir
+      // con las escrituras de las partidas. Se escucha una sola vez por
+      // conexión al torneo (subscribeAnnouncements, llamada junto con
+      // subscribeTournament en connectFirebase), no por mesa: así llega
+      // tanto a quien está mirando el torneo como a quien tiene una mesa
+      // abierta.
+      let announcementsCollectionRef = null;
+      let announcementsUnsub = null;
+      let lastAnnouncementId_ = null; // último anuncio ya mostrado, para no repetir el toast
+
+      function assertAdminOrReferee() {
+        if (!isCurrentUserAdmin(lastTournamentState) && !isCurrentUserReferee()) {
+          throw new Error("Esta acción es exclusiva del administrador o del árbitro del torneo");
+        }
+      }
+
+      function subscribeAnnouncements() {
+        if (announcementsUnsub) {
+          announcementsUnsub();
+          announcementsUnsub = null;
+        }
+        lastAnnouncementId_ = null;
+        let firstSnapshot = true;
+        announcementsUnsub = announcementsCollectionRef
+          .orderBy("ts", "desc")
+          .limit(1)
+          .onSnapshot(
+            (qsnap) => {
+              const doc = qsnap.docs[0];
+              if (!doc) {
+                renderAnnouncementBanner_(null);
+                firstSnapshot = false;
+                return;
+              }
+              const data = doc.data();
+              renderAnnouncementBanner_(data);
+              // No mostramos el toast del anuncio que ya estaba puesto al
+              // conectarnos (firstSnapshot), solo los que llegan después,
+              // para no interrumpir a alguien que recién entra al torneo.
+              if (!firstSnapshot && doc.id !== lastAnnouncementId_) {
+                toast("📢 " + (data.text || ""));
+              }
+              lastAnnouncementId_ = doc.id;
+              firstSnapshot = false;
+            },
+            () => {
+              // Si falla (por ejemplo, torneo viejo sin la subcolección
+              // todavía), no rompemos el resto de la app: el anuncio
+              // simplemente no se muestra.
+            }
+          );
+      }
+
+      function renderAnnouncementBanner_(data) {
+        const bannerEl = document.getElementById("tournament-announcement-banner");
+        const textEl = document.getElementById("tournament-announcement-text");
+        if (!bannerEl || !textEl) return;
+        if (!data || !data.text) {
+          bannerEl.style.display = "none";
+          return;
+        }
+        textEl.textContent = data.text;
+        bannerEl.style.display = "";
+      }
+
+      async function sendTournamentAnnouncement(text) {
+        assertAdminOrReferee();
+        const clean = (text || "").trim();
+        if (!clean) throw new Error("Escribí un mensaje para anunciar");
+        await announcementsCollectionRef.add({
+          text: clean,
+          ts: firebase.firestore.FieldValue.serverTimestamp(),
+          byEmail: currentUser ? currentUser.email : null,
+        });
+      }
+
       // Suscribe al chat de la mesa (round, board) actualmente abierta. Es
       // exclusivo de los dos rivales de esa mesa (igual que la llamada de
       // audio, ver renderCallUI): un espectador ni siquiera se suscribe, así
@@ -5051,6 +5215,7 @@
         }
         fbRoomRef = fbDb.collection("torneos").doc(room || "main");
         gamesCollectionRef = fbRoomRef.collection("games");
+        announcementsCollectionRef = fbRoomRef.collection("announcements");
         // Nos reconectamos a un torneo (nuevo o distinto "room"): olvidamos
         // qué ronda teníamos suscripta y limpiamos las partidas ya
         // cargadas, para que subscribeRoundGames() no se quede pensando
@@ -5068,6 +5233,7 @@
           });
         }
         subscribeTournament();
+        subscribeAnnouncements();
       }
 
       function updateAuthUI() {
@@ -7228,6 +7394,9 @@
           }
         }
 
+        const announceComposerEl = document.getElementById("tournament-announcement-composer");
+        if (announceComposerEl) announceComposerEl.style.display = isAdmin || isCurrentUserReferee() ? "" : "none";
+
         document.getElementById("tournament-admin-panel").style.display = isAdmin ? "" : "none";
         document.getElementById("tournament-next-round-btn").style.display = !isFinished && state.meta.round === 0 ? "" : "none";
         document.getElementById("tournament-finish-btn").style.display = isFinished ? "none" : "";
@@ -8665,6 +8834,17 @@
       document.getElementById("tournament-reopen-btn").addEventListener("click", async () => {
         try {
           await fbReopenTournament();
+        } catch (err) {
+          showError(err);
+        }
+      });
+
+      document.getElementById("tournament-announcement-send-btn").addEventListener("click", async () => {
+        const inputEl = document.getElementById("tournament-announcement-input");
+        try {
+          await sendTournamentAnnouncement(inputEl.value);
+          inputEl.value = "";
+          toast("📢 Anuncio enviado");
         } catch (err) {
           showError(err);
         }

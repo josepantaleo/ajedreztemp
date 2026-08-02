@@ -2094,6 +2094,38 @@
             </div>
 
             <div id="tournament-active-box" style="display: none">
+              <div id="tournament-announcement-banner" class="card" style="display: none; border-left: 4px solid #f5a524">
+                <p style="margin: 0; font-weight: 600">
+                  📢 <span id="tournament-announcement-text"></span>
+                </p>
+              </div>
+
+              <div id="tournament-announcement-composer" class="card" style="display: none">
+                <h3 style="margin: 0 0 10px">📢 Anuncio del torneo</h3>
+                <p class="muted" style="font-size: 12px; margin: 0 0 10px">
+                  Mensaje visible para todos los conectados (jugadores, espectadores), sin necesidad de que tengan una mesa
+                  abierta. Ej: "La ronda 3 arranca en 10 minutos".
+                </p>
+                <div style="display: flex; gap: 8px; flex-wrap: wrap">
+                  <input
+                    type="text"
+                    id="tournament-announcement-input"
+                    placeholder="Escribí el anuncio…"
+                    maxlength="200"
+                    style="
+                      flex: 1;
+                      min-width: 200px;
+                      padding: 8px 10px;
+                      border-radius: 8px;
+                      border: 1px solid var(--surface2);
+                      background: var(--surface);
+                      color: var(--text);
+                    "
+                  />
+                  <button class="btn primary" id="tournament-announcement-send-btn" type="button">Anunciar</button>
+                </div>
+              </div>
+
               <div class="card">
                 <div style="display: flex; justify-content: space-between; align-items: center; flex-wrap: wrap; gap: 10px">
                   <div style="display: flex; align-items: center; gap: 10px; flex-wrap: wrap">
