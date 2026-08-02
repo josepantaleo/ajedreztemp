@@ -2129,6 +2129,93 @@
       if (threatsCheckboxCfg) threatsCheckboxCfg.addEventListener("change", () => setShowThreats(threatsCheckboxCfg.checked));
       syncThreatsUI();
 
+      // Notificaciones del chat de partidas: espejo en Configuración del
+      // botón 🔕/🔔 que ya vive dentro de cada mesa de torneo (ver
+      // toggleMatchChatMute / setMatchChatMuted). El checkbox se muestra en
+      // positivo ("notificaciones activadas") para ser consistente con el
+      // resto de los toggles de esta pantalla, aunque el dato que se guarda
+      // (matchChatMuted) esté en negativo.
+      const chatNotifCheckboxCfg = document.getElementById("toggle-chatnotif-cfg");
+      function syncChatNotifCfgUI_() {
+        if (chatNotifCheckboxCfg) chatNotifCheckboxCfg.checked = !matchChatMuted;
+      }
+      if (chatNotifCheckboxCfg) {
+        chatNotifCheckboxCfg.checked = !matchChatMuted;
+        chatNotifCheckboxCfg.addEventListener("change", () => {
+          setMatchChatMuted(!chatNotifCheckboxCfg.checked);
+          toast(matchChatMuted ? "🔕 Chat silenciado" : "🔔 Chat con notificaciones");
+        });
+      }
+
+      // Avatar: el botón de Perfil abre el mismo selector de mascotas que
+      // ya se usa desde la burbuja del sidebar (ver openAvatarPicker).
+      const avatarBtnCfg = document.getElementById("config-avatar-btn");
+      if (avatarBtnCfg) avatarBtnCfg.addEventListener("click", openAvatarPicker);
+
+      // Perfil: nombre y curso. Antes el formulario no hacía nada al
+      // guardar; ahora persiste en el mismo state que ya usa el resto de
+      // la app (ver DEFAULT_STATE / save()).
+      const studentNameInput = document.getElementById("student-name");
+      const studentCourseInput = document.getElementById("student-course");
+      if (studentNameInput) studentNameInput.value = state.name === "Alumno" ? "" : state.name;
+      if (studentCourseInput) studentCourseInput.value = state.course || "";
+      const saveProfileBtn = document.getElementById("save-profile");
+      if (saveProfileBtn) {
+        saveProfileBtn.addEventListener("click", () => {
+          const name = studentNameInput ? studentNameInput.value.trim() : "";
+          const course = studentCourseInput ? studentCourseInput.value.trim() : "";
+          state.name = name || "Alumno";
+          state.course = course;
+          save();
+          updateProfile();
+          toast("💾 Perfil guardado");
+        });
+      }
+
+      // "Restaurar todas las preferencias": tema + fichas + los 4 toggles
+      // de ayudas/sonido a sus valores de fábrica, de una sola vez. Es
+      // intencionalmente distinto de "Borrar progreso": no toca XP,
+      // historial ni el perfil (nombre/curso/avatar) del alumno.
+      const resetPreferencesBtn = document.getElementById("reset-preferences");
+      if (resetPreferencesBtn) {
+        resetPreferencesBtn.addEventListener("click", () => {
+          if (!confirm("¿Restaurar tema, fichas y las 4 ayudas de juego a los valores de fábrica? No afecta tu progreso ni tu perfil.")) {
+            return;
+          }
+          applyTheme("blue");
+          applyPieceStyle("classic");
+          showLegalMoves = true;
+          localStorage.setItem("chessShowLegalMoves", "on");
+          syncLegalMovesUI();
+          showThreats = true;
+          localStorage.setItem("chessShowThreats", "on");
+          syncThreatsUI();
+          explainMode = true;
+          localStorage.setItem("chessExplainMode", "on");
+          syncExplainUI();
+          setSoundEnabled(true);
+          setMatchChatMuted(false);
+          if (gameStarted) render();
+          toast("↺ Preferencias restauradas a los valores de fábrica");
+        });
+      }
+
+      // "Borrar progreso": antes el botón no tenía ningún handler y no
+      // borraba nada. Ahora sí resetea XP, historial y estadísticas,
+      // conservando nombre/curso/avatar (eso es "perfil", no "progreso").
+      const resetDataBtn = document.getElementById("reset-data");
+      if (resetDataBtn) {
+        resetDataBtn.addEventListener("click", () => {
+          if (!confirm("¿Borrar todo tu progreso (XP, historial de partidas y estadísticas)? Esto no se puede deshacer.")) {
+            return;
+          }
+          state = { ...DEFAULT_STATE, name: state.name, course: state.course, avatar: state.avatar };
+          save();
+          updateProfile();
+          toast("🗑️ Progreso borrado");
+        });
+      }
+
       document.getElementById("new-game").onclick = () => {
         const modeValue = document.getElementById("mode").value;
         botEnabled = modeValue === "bot";
@@ -4482,10 +4569,15 @@
       // Prende/apaga el aviso (sonido + toast/popup) de mensajes nuevos del
       // chat de mesa. El badge de no leídos y los mensajes en sí siguen
       // funcionando igual estando silenciado; sólo se corta la interrupción.
-      function toggleMatchChatMute() {
-        matchChatMuted = !matchChatMuted;
+      function setMatchChatMuted(muted) {
+        matchChatMuted = muted;
         localStorage.setItem("chessMatchChatMuted", matchChatMuted ? "on" : "off");
         renderMatchChatMuteBtn_();
+        syncChatNotifCfgUI_();
+      }
+
+      function toggleMatchChatMute() {
+        setMatchChatMuted(!matchChatMuted);
         toast(matchChatMuted ? "🔕 Chat silenciado" : "🔔 Chat con notificaciones");
       }
 
@@ -4987,6 +5079,24 @@
           signoutBtn.style.display = "none";
         }
         updateModeBadge();
+        updateConfigAccountUI_();
+      }
+
+      // Resumen de cuenta en Configuración: mismo currentUser que ya
+      // resuelve onAuthStateChanged en connectFirebase() (se conecta solo
+      // al cargar la página, con o sin visitar "Torneo"), así que este
+      // card puede quedar al día sin depender de esa pantalla.
+      function updateConfigAccountUI_() {
+        const statusEl = document.getElementById("config-account-status");
+        const signoutBtn = document.getElementById("config-signout-btn");
+        if (!statusEl || !signoutBtn) return;
+        if (currentUser) {
+          statusEl.textContent = `Conectado como ${currentUser.displayName} (${currentUser.email})`;
+          signoutBtn.style.display = "";
+        } else {
+          statusEl.textContent = "Todavía no iniciaste sesión con Gmail. Entrá a \"Torneo\" para hacerlo.";
+          signoutBtn.style.display = "none";
+        }
       }
 
       function isCurrentUserAdmin(state) {
@@ -8474,6 +8584,18 @@
           showError(err);
         }
       });
+
+      const configSignoutBtn = document.getElementById("config-signout-btn");
+      if (configSignoutBtn) {
+        configSignoutBtn.addEventListener("click", async () => {
+          try {
+            await firebase.auth().signOut();
+            toast("🚪 Sesión cerrada");
+          } catch (err) {
+            toast("❌ No se pudo cerrar sesión: " + err.message);
+          }
+        });
+      }
 
       document.getElementById("tournament-create-btn").addEventListener("click", async () => {
         const name = document.getElementById("tournament-name-input").value.trim() || "Torneo";

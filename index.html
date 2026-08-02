@@ -2554,6 +2554,7 @@
             </p>
             <nav class="settings-quicknav">
               <a href="#config-perfil">👤 Perfil</a>
+              <a href="#config-cuenta">🔑 Cuenta</a>
               <a href="#config-ayudas">🎓 Ayudas y sonido</a>
               <a href="#config-colores">🎨 Colores</a>
               <a href="#config-fichas">♟️ Fichas</a>
@@ -2577,7 +2578,29 @@
               <button class="btn primary" id="save-profile">
                 💾 Guardar perfil
               </button>
+              <button class="btn" id="config-avatar-btn" type="button">
+                🧑‍🎓 Cambiar avatar
+              </button>
             </div>
+          </div>
+
+          <div class="card" id="config-cuenta" style="margin-top: 20px">
+            <div class="panel-title">🔑 Cuenta</div>
+            <p
+              id="config-account-status"
+              style="color: var(--muted); margin: 0 0 12px"
+            >
+              Iniciá sesión con tu cuenta de Gmail desde "Torneo" para jugar
+              partidas oficiales.
+            </p>
+            <button
+              class="btn danger"
+              id="config-signout-btn"
+              type="button"
+              style="display: none"
+            >
+              🚪 Cerrar sesión
+            </button>
           </div>
 
           <div class="card" id="config-ayudas" style="margin-top: 20px">
@@ -2628,6 +2651,19 @@
               </div>
               <label class="switch">
                 <input type="checkbox" id="toggle-sound-cfg" checked />
+                <span class="slider"></span>
+              </label>
+            </div>
+
+            <div class="toggle">
+              <div>
+                Notificaciones de chat en partidas<small
+                  >Sonido y aviso al llegar un mensaje nuevo en el chat de una
+                  mesa de torneo.</small
+                >
+              </div>
+              <label class="switch">
+                <input type="checkbox" id="toggle-chatnotif-cfg" checked />
                 <span class="slider"></span>
               </label>
             </div>
@@ -3083,6 +3119,9 @@
               />
             </label>
             <br />
+            <button class="btn" id="reset-preferences" style="margin-top: 15px">
+              ↺ Restaurar todas las preferencias
+            </button>
             <button class="btn danger" id="reset-data" style="margin-top: 15px">
               🗑️ Borrar progreso
             </button>
