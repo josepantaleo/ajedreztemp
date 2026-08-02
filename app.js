@@ -327,12 +327,12 @@
         toast("❌ " + msg);
       }
 
-      function toast(text) {
+      function toast(text, durationMs) {
         const el = document.getElementById("toast");
         el.textContent = text;
         el.classList.add("show");
         clearTimeout(toastTimer);
-        toastTimer = setTimeout(() => el.classList.remove("show"), 2200);
+        toastTimer = setTimeout(() => el.classList.remove("show"), durationMs || 2200);
       }
 
       function showAlert(text, variant) {
@@ -530,6 +530,12 @@
             if (!enabled) return;
             tone(700, 0, 0.06, { type: "sine", gain: 0.09 });
             tone(920, 0.07, 0.08, { type: "sine", gain: 0.09 });
+          },
+          announcement() {
+            if (!enabled) return;
+            tone(660, 0, 0.1, { type: "sine", gain: 0.15 });
+            tone(880, 0.12, 0.1, { type: "sine", gain: 0.15 });
+            tone(1040, 0.24, 0.16, { type: "sine", gain: 0.16 });
           },
           invalid() {
             if (!enabled) return;
@@ -4512,7 +4518,8 @@
               // conectarnos (firstSnapshot), solo los que llegan después,
               // para no interrumpir a alguien que recién entra al torneo.
               if (!firstSnapshot && doc.id !== lastAnnouncementId_) {
-                toast("📢 " + (data.text || ""));
+                toast("📢 " + (data.text || ""), 6000);
+                SoundFX.announcement();
               }
               lastAnnouncementId_ = doc.id;
               firstSnapshot = false;
