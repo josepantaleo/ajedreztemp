@@ -36,7 +36,6 @@
           <button data-page="torneo">🏆 Torneo</button>
           <button data-page="pantalla-publica">📺 Pantalla pública</button>
           <button data-page="estadisticas">📊 Estadísticas</button>
-          <button data-page="temas">🎨 Temas</button>
           <button data-page="configuracion">⚙️ Configuración</button>
         </nav>
 
@@ -2546,9 +2545,96 @@
           </div>
         </section>
 
-        <section class="page" id="page-temas">
+        <section class="page" id="page-configuracion">
           <div class="card">
-            <div class="panel-title">🎨 Personalización</div>
+            <div class="panel-title">⚙️ Configuración</div>
+            <p style="color: var(--muted); margin: 0 0 4px">
+              Tu perfil, tus ayudas de juego y tu apariencia, todo en un
+              mismo lugar.
+            </p>
+            <nav class="settings-quicknav">
+              <a href="#config-perfil">👤 Perfil</a>
+              <a href="#config-ayudas">🎓 Ayudas y sonido</a>
+              <a href="#config-colores">🎨 Colores</a>
+              <a href="#config-fichas">♟️ Fichas</a>
+              <a href="#config-datos">💾 Datos y respaldo</a>
+            </nav>
+          </div>
+
+          <div class="card" id="config-perfil" style="margin-top: 20px">
+            <div class="panel-title">👤 Perfil</div>
+            <div class="settings" style="max-width: 500px">
+              <label for="student-name">
+                Nombre del alumno
+                <input id="student-name" placeholder="Escribí tu nombre" />
+              </label>
+
+              <label for="student-course">
+                Curso
+                <input id="student-course" placeholder="Ejemplo: 3.º Año" />
+              </label>
+
+              <button class="btn primary" id="save-profile">
+                💾 Guardar perfil
+              </button>
+            </div>
+          </div>
+
+          <div class="card" id="config-ayudas" style="margin-top: 20px">
+            <div class="panel-title">🎓 Ayudas de juego y sonido</div>
+            <p style="color: var(--muted); margin: 0 0 12px">
+              Estas mismas opciones también se pueden cambiar al vuelo desde
+              la pantalla "Jugar"; acá quedan centralizadas para dejarlas
+              como querés antes de empezar.
+            </p>
+
+            <div class="toggle">
+              <div>
+                Movimientos legales<small
+                  >Mostrar dónde puede ir la pieza.</small
+                >
+              </div>
+              <label class="switch">
+                <input type="checkbox" id="toggle-legal-cfg" checked />
+                <span class="slider"></span>
+              </label>
+            </div>
+
+            <div class="toggle">
+              <div>Amenazas<small>Resaltar piezas atacadas.</small></div>
+              <label class="switch">
+                <input type="checkbox" id="toggle-threats-cfg" checked />
+                <span class="slider"></span>
+              </label>
+            </div>
+
+            <div class="toggle">
+              <div>
+                Explicaciones<small
+                  >Recibir consejos durante la partida.</small
+                >
+              </div>
+              <label class="switch">
+                <input type="checkbox" id="toggle-explain-cfg" checked />
+                <span class="slider"></span>
+              </label>
+            </div>
+
+            <div class="toggle">
+              <div>
+                Sonido<small
+                  >Efectos de sonido al mover, capturar y dar jaque.</small
+                >
+              </div>
+              <label class="switch">
+                <input type="checkbox" id="toggle-sound-cfg" checked />
+                <span class="slider"></span>
+              </label>
+            </div>
+          </div>
+
+          <div class="card" id="config-colores" style="margin-top: 20px">
+            <div class="panel-title">🎨 Colores</div>
             <h2>Elegí tu estilo</h2>
             <p style="color: var(--muted); margin-bottom: 0">
               Personalizá la apariencia de la escuela y encontrá el ambiente que
@@ -2740,7 +2826,7 @@
             </div>
           </div>
 
-          <div class="card" style="margin-top: 20px">
+          <div class="card" id="config-fichas" style="margin-top: 20px">
             <div class="panel-title">♟️ Fichas</div>
             <h2>Elegí el estilo de las fichas</h2>
             <p style="color: var(--muted); margin-bottom: 0">
@@ -2983,29 +3069,8 @@
               </div>
             </div>
           </div>
-        </section>
 
-        <section class="page" id="page-configuracion">
-          <div class="card">
-            <div class="panel-title">⚙️ Configuración</div>
-            <div class="settings" style="max-width: 500px">
-              <label for="student-name">
-                Nombre del alumno
-                <input id="student-name" placeholder="Escribí tu nombre" />
-              </label>
-
-              <label for="student-course">
-                Curso
-                <input id="student-course" placeholder="Ejemplo: 3.º Año" />
-              </label>
-
-              <button class="btn primary" id="save-profile">
-                💾 Guardar perfil
-              </button>
-            </div>
-          </div>
-
-          <div class="card" style="margin-top: 20px">
+          <div class="card" id="config-datos" style="margin-top: 20px">
             <div class="panel-title">💾 Datos y respaldo</div>
             <button class="btn" id="export-json">📤 Exportar datos</button>
             <label class="btn" style="display: inline-block; cursor: pointer">

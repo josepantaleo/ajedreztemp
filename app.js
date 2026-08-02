@@ -7602,6 +7602,146 @@
         });
       }
 
+      // Antes, cada vez que se reconstruía la lista de jugadores se volvían a
+      // enganchar listeners nuevos con listEl.querySelectorAll(...).forEach(...),
+      // uno por cada botón (editar/cancelar/guardar/eliminar/aprobar/
+      // rechazar/retirar/reincorporar/descalificar) de cada jugador. Con
+      // varias inscripciones o aprobaciones en simultáneo (torneo online
+      // arrancando) eso significaba des-enganchar y re-enganchar decenas de
+      // listeners muchas veces por segundo. Ahora se engancha UNA sola vez
+      // (delegación de eventos sobre el contenedor), igual que ya se hacía
+      // para la lista de mesas (ver setupPairingsListDelegation_ arriba).
+      let playersDelegationSetup_ = false;
+      function setupPlayersListDelegation_(listEl) {
+        if (playersDelegationSetup_) return;
+        playersDelegationSetup_ = true;
+
+        listEl.addEventListener("click", (e) => {
+          const editBtn = e.target.closest("button[data-edit-player]");
+          if (editBtn) {
+            tournamentEditingPlayerId = editBtn.dataset.editPlayer;
+            renderPlayersPanel(lastTournamentState, true);
+            return;
+          }
+
+          const cancelBtn = e.target.closest("button[data-cancel-edit-player]");
+          if (cancelBtn) {
+            tournamentEditingPlayerId = null;
+            renderPlayersPanel(lastTournamentState, true);
+            return;
+          }
+
+          const saveBtn = e.target.closest("button[data-save-player]");
+          if (saveBtn) {
+            (async () => {
+              const playerId = saveBtn.dataset.savePlayer;
+              const row = listEl.querySelector(`[data-player-row="${playerId}"]`);
+              const name = row.querySelector(".player-edit-name").value;
+              const email = row.querySelector(".player-edit-email").value;
+              try {
+                await fbEditPlayer(playerId, name, email);
+                tournamentEditingPlayerId = null;
+                toast("✓ Jugador actualizado");
+              } catch (err) {
+                showError(err);
+              }
+            })();
+            return;
+          }
+
+          const deleteBtn = e.target.closest("button[data-delete-player]");
+          if (deleteBtn) {
+            (async () => {
+              const playerId = deleteBtn.dataset.deletePlayer;
+              const player = (lastTournamentState ? lastTournamentState.players : []).find((p) => p.id === playerId);
+              if (!confirm(`¿Eliminar a ${player ? player.name : "este jugador"}? Se recalculará el torneo.`)) return;
+              try {
+                await fbDeletePlayer(playerId);
+                toast("✓ Jugador eliminado");
+              } catch (err) {
+                showError(err);
+              }
+            })();
+            return;
+          }
+
+          const approveBtn = e.target.closest("button[data-approve-registration]");
+          if (approveBtn) {
+            (async () => {
+              const playerId = approveBtn.dataset.approveRegistration;
+              try {
+                await fbApproveRegistration(playerId);
+                toast("✅ Inscripción autorizada");
+              } catch (err) {
+                showError(err);
+              }
+            })();
+            return;
+          }
+
+          const rejectBtn = e.target.closest("button[data-reject-registration]");
+          if (rejectBtn) {
+            (async () => {
+              const playerId = rejectBtn.dataset.rejectRegistration;
+              const player = (lastTournamentState ? lastTournamentState.players : []).find((p) => p.id === playerId);
+              if (!confirm(`¿Rechazar la inscripción de ${player ? player.name : "esta persona"}?`)) return;
+              try {
+                await fbRejectRegistration(playerId);
+                toast("🚫 Inscripción rechazada");
+              } catch (err) {
+                showError(err);
+              }
+            })();
+            return;
+          }
+
+          const withdrawBtn = e.target.closest("button[data-withdraw-player]");
+          if (withdrawBtn) {
+            (async () => {
+              const playerId = withdrawBtn.dataset.withdrawPlayer;
+              const player = (lastTournamentState ? lastTournamentState.players : []).find((p) => p.id === playerId);
+              if (!confirm(`¿Retirar a ${player ? player.name : "este jugador"} del torneo? Conserva su historial, pero no se lo volverá a emparejar.`)) return;
+              try {
+                await fbWithdrawPlayer(playerId);
+                toast("🚪 Jugador retirado");
+              } catch (err) {
+                showError(err);
+              }
+            })();
+            return;
+          }
+
+          const reactivateBtn = e.target.closest("button[data-reactivate-player]");
+          if (reactivateBtn) {
+            (async () => {
+              const playerId = reactivateBtn.dataset.reactivatePlayer;
+              try {
+                await fbReactivatePlayer(playerId);
+                toast("↩️ Jugador reincorporado");
+              } catch (err) {
+                showError(err);
+              }
+            })();
+            return;
+          }
+
+          const disqualifyBtn = e.target.closest("button[data-disqualify-player]");
+          if (disqualifyBtn) {
+            (async () => {
+              const playerId = disqualifyBtn.dataset.disqualifyPlayer;
+              const player = (lastTournamentState ? lastTournamentState.players : []).find((p) => p.id === playerId);
+              if (!confirm(`¿Descalificar a ${player ? player.name : "este jugador"}? Esta acción no tiene vuelta atrás.`)) return;
+              try {
+                await fbDisqualifyPlayer(playerId);
+                toast("⛔ Jugador descalificado");
+              } catch (err) {
+                showError(err);
+              }
+            })();
+          }
+        });
+      }
+
       // Panel de administración de jugadores (alta, edición de nombre/email,
       // baja y acciones de estado: retirar/reincorporar/descalificar).
       // Visible para el árbitro del torneo y también para el administrador
@@ -7619,6 +7759,7 @@
         }
         card.style.display = "";
         const listEl = document.getElementById("tournament-players-list");
+        setupPlayersListDelegation_(listEl);
 
         if (tournamentEditingPlayerId && !state.players.some((p) => p.id === tournamentEditingPlayerId)) {
           tournamentEditingPlayerId = null;
@@ -7732,108 +7873,10 @@
               </div>`;
           })
           .join("");
-
-        listEl.querySelectorAll("button[data-edit-player]").forEach((btn) => {
-          btn.addEventListener("click", () => {
-            tournamentEditingPlayerId = btn.dataset.editPlayer;
-            renderPlayersPanel(lastTournamentState, true);
-          });
-        });
-        listEl.querySelectorAll("button[data-cancel-edit-player]").forEach((btn) => {
-          btn.addEventListener("click", () => {
-            tournamentEditingPlayerId = null;
-            renderPlayersPanel(lastTournamentState, true);
-          });
-        });
-        listEl.querySelectorAll("button[data-save-player]").forEach((btn) => {
-          btn.addEventListener("click", async () => {
-            const playerId = btn.dataset.savePlayer;
-            const row = listEl.querySelector(`[data-player-row="${playerId}"]`);
-            const name = row.querySelector(".player-edit-name").value;
-            const email = row.querySelector(".player-edit-email").value;
-            try {
-              await fbEditPlayer(playerId, name, email);
-              tournamentEditingPlayerId = null;
-              toast("✓ Jugador actualizado");
-            } catch (err) {
-              showError(err);
-            }
-          });
-        });
-        listEl.querySelectorAll("button[data-delete-player]").forEach((btn) => {
-          btn.addEventListener("click", async () => {
-            const playerId = btn.dataset.deletePlayer;
-            const player = state.players.find((p) => p.id === playerId);
-            if (!confirm(`¿Eliminar a ${player ? player.name : "este jugador"}? Se recalculará el torneo.`)) return;
-            try {
-              await fbDeletePlayer(playerId);
-              toast("✓ Jugador eliminado");
-            } catch (err) {
-              showError(err);
-            }
-          });
-        });
-        listEl.querySelectorAll("button[data-approve-registration]").forEach((btn) => {
-          btn.addEventListener("click", async () => {
-            const playerId = btn.dataset.approveRegistration;
-            try {
-              await fbApproveRegistration(playerId);
-              toast("✅ Inscripción autorizada");
-            } catch (err) {
-              showError(err);
-            }
-          });
-        });
-        listEl.querySelectorAll("button[data-reject-registration]").forEach((btn) => {
-          btn.addEventListener("click", async () => {
-            const playerId = btn.dataset.rejectRegistration;
-            const player = state.players.find((p) => p.id === playerId);
-            if (!confirm(`¿Rechazar la inscripción de ${player ? player.name : "esta persona"}?`)) return;
-            try {
-              await fbRejectRegistration(playerId);
-              toast("🚫 Inscripción rechazada");
-            } catch (err) {
-              showError(err);
-            }
-          });
-        });
-        listEl.querySelectorAll("button[data-withdraw-player]").forEach((btn) => {
-          btn.addEventListener("click", async () => {
-            const playerId = btn.dataset.withdrawPlayer;
-            const player = state.players.find((p) => p.id === playerId);
-            if (!confirm(`¿Retirar a ${player ? player.name : "este jugador"} del torneo? Conserva su historial, pero no se lo volverá a emparejar.`)) return;
-            try {
-              await fbWithdrawPlayer(playerId);
-              toast("🚪 Jugador retirado");
-            } catch (err) {
-              showError(err);
-            }
-          });
-        });
-        listEl.querySelectorAll("button[data-reactivate-player]").forEach((btn) => {
-          btn.addEventListener("click", async () => {
-            const playerId = btn.dataset.reactivatePlayer;
-            try {
-              await fbReactivatePlayer(playerId);
-              toast("↩️ Jugador reincorporado");
-            } catch (err) {
-              showError(err);
-            }
-          });
-        });
-        listEl.querySelectorAll("button[data-disqualify-player]").forEach((btn) => {
-          btn.addEventListener("click", async () => {
-            const playerId = btn.dataset.disqualifyPlayer;
-            const player = state.players.find((p) => p.id === playerId);
-            if (!confirm(`¿Descalificar a ${player ? player.name : "este jugador"}? Esta acción no tiene vuelta atrás.`)) return;
-            try {
-              await fbDisqualifyPlayer(playerId);
-              toast("⛔ Jugador descalificado");
-            } catch (err) {
-              showError(err);
-            }
-          });
-        });
+        // Los clicks de editar/cancelar/guardar/eliminar/aprobar/rechazar/
+        // retirar/reincorporar/descalificar los maneja el listener delegado
+        // enganchado una sola vez en setupPlayersListDelegation_ (arriba):
+        // no hace falta volver a buscarlos ni re-engancharlos acá.
       }
 
       async function refreshTournament() {
