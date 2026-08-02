@@ -2111,6 +2111,13 @@
                 </p>
               </div>
 
+              <div id="tournament-round-countdown-banner" class="card round-countdown-banner" style="display: none">
+                <p style="margin: 0; font-weight: 600">
+                  ⏳ <span id="tournament-round-countdown-label"></span>
+                  <span id="tournament-round-countdown-time" class="round-countdown-time"></span>
+                </p>
+              </div>
+
               <button
                 class="btn"
                 id="tournament-announcement-history-toggle"
@@ -2148,6 +2155,44 @@
                     "
                   />
                   <button class="btn primary" id="tournament-announcement-send-btn" type="button">Anunciar</button>
+                </div>
+              </div>
+
+              <div id="tournament-round-countdown-composer" class="card" style="display: none">
+                <h3 style="margin: 0 0 10px">⏳ Countdown de ronda</h3>
+                <p class="muted" style="font-size: 12px; margin: 0 0 10px">
+                  Arranca una cuenta regresiva visible para todos (jugadores y espectadores), sincronizada con el reloj del
+                  servidor — no depende de que el reloj de cada celular esté bien puesto. Reemplaza al anuncio suelto tipo "la
+                  ronda arranca en 10 minutos".
+                </p>
+                <div style="display: flex; gap: 8px; flex-wrap: wrap; align-items: center">
+                  <button class="btn" type="button" data-countdown-minutes="5">5 min</button>
+                  <button class="btn" type="button" data-countdown-minutes="10">10 min</button>
+                  <button class="btn" type="button" data-countdown-minutes="15">15 min</button>
+                  <input
+                    type="number"
+                    id="tournament-round-countdown-custom-minutes"
+                    placeholder="Otro (min)"
+                    min="1"
+                    max="180"
+                    style="
+                      width: 100px;
+                      padding: 8px 10px;
+                      border-radius: 8px;
+                      border: 1px solid var(--surface2);
+                      background: var(--surface);
+                      color: var(--text);
+                    "
+                  />
+                  <button class="btn primary" id="tournament-round-countdown-start-btn" type="button">Arrancar</button>
+                  <button
+                    class="btn"
+                    id="tournament-round-countdown-cancel-btn"
+                    type="button"
+                    style="display: none"
+                  >
+                    Cancelar countdown
+                  </button>
                 </div>
               </div>
 

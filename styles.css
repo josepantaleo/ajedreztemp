@@ -1125,6 +1125,32 @@
         white-space: nowrap;
       }
 
+      .round-countdown-banner {
+        border-left: 4px solid #2fbf71;
+      }
+      .round-countdown-time {
+        font-variant-numeric: tabular-nums;
+        font-weight: 800;
+        margin-left: 6px;
+        letter-spacing: 0.02em;
+      }
+      .round-countdown-banner.round-countdown-urgent {
+        border-left-color: #e5484d;
+        animation: round-countdown-pulse 1s ease-in-out infinite;
+      }
+      .round-countdown-banner.round-countdown-urgent .round-countdown-time {
+        color: #e5484d;
+      }
+      @keyframes round-countdown-pulse {
+        0%,
+        100% {
+          opacity: 1;
+        }
+        50% {
+          opacity: 0.6;
+        }
+      }
+
       /* Controles: parte del flujo normal (ya no position:fixed),
          así nunca se superponen al tablero ni quedan cortados */
       body.fullscreen-game .controls-panel ,
@@ -3832,6 +3858,45 @@
 .public-screen-active-row:last-child,
 .public-screen-result-row:last-child {
   border-bottom: none;
+}
+
+.public-screen-active-row-cycle {
+  flex-direction: column;
+  align-items: stretch;
+  gap: 8px;
+  border-bottom: none;
+  padding: 10px 0 16px;
+  font-size: clamp(1.3rem, 2.6vw, 2.1rem);
+  font-weight: 700;
+}
+
+.public-screen-cycle-counter {
+  font-weight: 600;
+  color: var(--muted);
+  font-size: 0.6em;
+}
+
+.public-screen-cycle-progress {
+  height: 5px;
+  border-radius: 999px;
+  background: var(--surface2);
+  overflow: hidden;
+}
+
+.public-screen-cycle-progress-bar {
+  height: 100%;
+  width: 0%;
+  background: var(--accent2);
+  animation: public-screen-cycle-progress-anim 10s linear forwards;
+}
+
+@keyframes public-screen-cycle-progress-anim {
+  from {
+    width: 0%;
+  }
+  to {
+    width: 100%;
+  }
 }
 
 .public-screen-board-badge {

@@ -4491,6 +4491,31 @@
       let lastAnnouncementId_ = null; // último anuncio ya mostrado, para no repetir el toast
       let announcementHistory_ = []; // últimos anuncios (más nuevo primero), para el listado desplegable
 
+      // --- Carrusel de "mesas en juego" de la pantalla pública ---
+      // En vez de listar todas las mesas activas apiladas (poco legible en
+      // un proyector con muchas mesas), se muestra una a la vez en letra
+      // grande y se pasa a la siguiente cada 10s.
+      let publicScreenActiveGames_ = []; // mesas activas de la ronda actual, orden fijo por número de mesa
+      let publicScreenCycleIndex_ = 0; // índice dentro de publicScreenActiveGames_ que se está mostrando ahora
+      let publicScreenCycleTimer_ = null;
+
+      // --- Countdown de ronda sincronizado con el reloj del servidor ---
+      // Firestore no tiene un equivalente al ".info/serverTimeOffset" de
+      // Realtime Database, así que lo estimamos nosotros: cada vez que nos
+      // llega (sin hasPendingWrites) el Timestamp server-side
+      // meta.roundCountdownSetAt, comparamos ese instante "real" contra
+      // nuestro Date.now() local en el momento de recibirlo. La diferencia
+      // (drift de reloj del dispositivo + latencia de red, en general
+      // despreciable) es countdownClockOffsetMs_, y de ahí en más
+      // syncedNow_() la usa para que la cuenta regresiva no dependa de que
+      // el celular de cada chico tenga bien puesta la hora.
+      let countdownClockOffsetMs_ = 0;
+      let roundCountdownTimer_ = null;
+
+      function syncedNow_() {
+        return Date.now() + countdownClockOffsetMs_;
+      }
+
       function assertAdminOrReferee() {
         if (!isCurrentUserAdmin(lastTournamentState) && !isCurrentUserReferee()) {
           throw new Error("Esta acción es exclusiva del administrador o del árbitro del torneo");
@@ -4558,6 +4583,60 @@
         return ts.toDate().toLocaleTimeString("es-AR", { hour: "2-digit", minute: "2-digit" });
       }
 
+      function stopRoundCountdownTimer_() {
+        if (roundCountdownTimer_) {
+          clearInterval(roundCountdownTimer_);
+          roundCountdownTimer_ = null;
+        }
+      }
+
+      // Dibuja (y hace tickear) el banner de countdown de ronda. Se llama
+      // desde renderTournamentState en cada snapshot, así que siempre
+      // arranca desde los datos más frescos de meta.roundCountdownSetAt /
+      // roundCountdownMs; el setInterval interno solo se ocupa de refrescar
+      // el texto entre snapshots.
+      function renderRoundCountdown_(state) {
+        const bannerEl = document.getElementById("tournament-round-countdown-banner");
+        const labelEl = document.getElementById("tournament-round-countdown-label");
+        const timeEl = document.getElementById("tournament-round-countdown-time");
+        const cancelBtn = document.getElementById("tournament-round-countdown-cancel-btn");
+        if (!bannerEl || !labelEl || !timeEl) return;
+
+        stopRoundCountdownTimer_();
+
+        const setAt = state.meta.roundCountdownSetAt;
+        const durationMs = state.meta.roundCountdownMs;
+        const hasTarget = setAt && typeof setAt.toMillis === "function" && durationMs;
+
+        if (cancelBtn) cancelBtn.style.display = hasTarget ? "" : "none";
+
+        if (!hasTarget) {
+          bannerEl.style.display = "none";
+          bannerEl.classList.remove("round-countdown-urgent");
+          return;
+        }
+
+        const targetMs = setAt.toMillis() + durationMs;
+        labelEl.textContent = `Ronda ${state.meta.round + 1} arranca en`;
+        bannerEl.style.display = "";
+
+        const tick = () => {
+          const remainingMs = targetMs - syncedNow_();
+          if (remainingMs <= 0) {
+            timeEl.textContent = "¡ya!";
+            bannerEl.classList.remove("round-countdown-urgent");
+            stopRoundCountdownTimer_();
+            return;
+          }
+          const remainingSec = Math.ceil(remainingMs / 1000);
+          timeEl.textContent = formatTime(remainingSec);
+          bannerEl.classList.toggle("round-countdown-urgent", remainingSec <= 60);
+        };
+
+        tick();
+        roundCountdownTimer_ = setInterval(tick, 250);
+      }
+
       function escapeAnnouncementHtml_(s) {
         return String(s || "").replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
       }
@@ -4594,6 +4673,44 @@
           text: clean,
           ts: firebase.firestore.FieldValue.serverTimestamp(),
           byEmail: currentUser ? currentUser.email : null,
+        });
+      }
+
+      // Arranca (o reemplaza) el countdown visible de "la próxima ronda
+      // arranca en...". Guardamos el instante de arranque como
+      // serverTimestamp() (roundCountdownSetAt) más una duración en ms
+      // (roundCountdownMs) en vez de guardar directamente un Timestamp
+      // "target": así el instante de arranque real queda fijado por el
+      // reloj del servidor en el momento en que el admin/árbitro apretó el
+      // botón, sin depender de qué hora tenga puesta SU celular tampoco.
+      async function fbSetRoundCountdown(minutes) {
+        assertAdminOrReferee();
+        const m = Number(minutes);
+        if (!m || m <= 0) throw new Error("Elegí una cantidad de minutos válida");
+        await fbDb.runTransaction(async (tx) => {
+          const snap = await tx.get(fbRoomRef);
+          if (!snap.exists) throw new Error("Todavía no creaste un torneo");
+          const data = snap.data();
+          tx.update(fbRoomRef, {
+            meta: {
+              ...data.meta,
+              roundCountdownSetAt: firebase.firestore.FieldValue.serverTimestamp(),
+              roundCountdownMs: Math.round(m * 60000),
+            },
+          });
+        });
+      }
+
+      // Cancela el countdown activo (si lo hay) antes de que llegue a cero.
+      async function fbCancelRoundCountdown() {
+        assertAdminOrReferee();
+        await fbDb.runTransaction(async (tx) => {
+          const snap = await tx.get(fbRoomRef);
+          if (!snap.exists) return;
+          const data = snap.data();
+          tx.update(fbRoomRef, {
+            meta: { ...data.meta, roundCountdownSetAt: null, roundCountdownMs: null },
+          });
         });
       }
 
@@ -5242,6 +5359,14 @@
           // incomparecencia se convierta en WO automático (0 = deshabilitado,
           // hay que declararlo a mano como siempre). Ver fbAutoDeclareForfeits.
           woGraceMinutes: 0,
+          // Countdown de "la próxima ronda arranca en...", ver
+          // fbSetRoundCountdown/renderRoundCountdown_. roundCountdownSetAt es
+          // un Timestamp de Firestore (server-side) y roundCountdownMs la
+          // duración elegida por el admin/árbitro; el instante real de
+          // arranque es roundCountdownSetAt + roundCountdownMs, calculado
+          // igual en todos los clientes sin importar el reloj de cada uno.
+          roundCountdownSetAt: null,
+          roundCountdownMs: null,
         };
         if (!data) {
           return { meta: { ...defaults }, players: [], pairings: [] };
@@ -5434,6 +5559,15 @@
               );
             }
             const state = normalizeTournamentState(snap.exists ? snap.data() : null);
+            // No recalculamos el offset con writes propios todavía pendientes
+            // de confirmar (el serverTimestamp() local vale null hasta que
+            // el server lo resuelve) para no contaminar la estimación.
+            if (!snap.metadata.hasPendingWrites) {
+              const setAt = state.meta.roundCountdownSetAt;
+              if (setAt && typeof setAt.toMillis === "function") {
+                countdownClockOffsetMs_ = setAt.toMillis() - Date.now();
+              }
+            }
             const previousStatus = lastKnownTournamentStatus_;
             lastKnownTournamentStatus_ = state.meta.status;
             lastTournamentState = state;
@@ -6615,9 +6749,10 @@
 
       async function fbResetAll() {
         assertAdmin();
-        // Las partidas viven en su propia subcolección (ver
-        // gamesCollectionRef): sobrescribir el documento principal con
-        // .set() no las borra solas, hay que borrarlas explícitamente.
+        // Las partidas y los anuncios viven en sus propias subcolecciones
+        // (ver gamesCollectionRef / announcementsCollectionRef): sobrescribir
+        // el documento principal con .set() no las borra solas, hay que
+        // borrarlas explícitamente.
         const gamesSnap = await gamesCollectionRef.get();
         // Firestore permite hasta 500 operaciones por batch; en la
         // práctica un torneo escolar nunca se acerca a eso, pero
@@ -6627,6 +6762,15 @@
           const batch = fbDb.batch();
           docs.slice(i, i + 400).forEach((d) => batch.delete(d.ref));
           await batch.commit();
+        }
+        if (announcementsCollectionRef) {
+          const announcementsSnap = await announcementsCollectionRef.get();
+          const announcementDocs = announcementsSnap.docs;
+          for (let i = 0; i < announcementDocs.length; i += 400) {
+            const batch = fbDb.batch();
+            announcementDocs.slice(i, i + 400).forEach((d) => batch.delete(d.ref));
+            await batch.commit();
+          }
         }
         await fbRoomRef.set({ meta: { name: "", round: 0, status: "setup", adminEmails: [], totalRounds: null }, players: [], pairings: [] });
         return getTournamentStateOnce();
@@ -7446,6 +7590,10 @@
         const announceComposerEl = document.getElementById("tournament-announcement-composer");
         if (announceComposerEl) announceComposerEl.style.display = isAdmin || isCurrentUserReferee() ? "" : "none";
 
+        const countdownComposerEl = document.getElementById("tournament-round-countdown-composer");
+        if (countdownComposerEl) countdownComposerEl.style.display = isAdmin || isCurrentUserReferee() ? "" : "none";
+        renderRoundCountdown_(state);
+
         document.getElementById("tournament-admin-panel").style.display = isAdmin ? "" : "none";
         document.getElementById("tournament-next-round-btn").style.display = !isFinished && state.meta.round === 0 ? "" : "none";
         document.getElementById("tournament-finish-btn").style.display = isFinished ? "none" : "";
@@ -7784,6 +7932,59 @@
         }
       }
 
+      function publicScreenGameKey_(p) {
+        return p.round + "-" + p.board;
+      }
+
+      function stopPublicScreenCycle_() {
+        if (publicScreenCycleTimer_) {
+          clearInterval(publicScreenCycleTimer_);
+          publicScreenCycleTimer_ = null;
+        }
+      }
+
+      function startPublicScreenCycleIfNeeded_() {
+        if (publicScreenCycleTimer_) return;
+        publicScreenCycleTimer_ = setInterval(advancePublicScreenCycle_, 10000);
+      }
+
+      function advancePublicScreenCycle_() {
+        if (publicScreenActiveGames_.length <= 1) return;
+        publicScreenCycleIndex_ = (publicScreenCycleIndex_ + 1) % publicScreenActiveGames_.length;
+        renderPublicScreenActiveCard_();
+      }
+
+      // Dibuja SOLO la mesa que le toca al índice actual del carrusel (o el
+      // estado vacío si no hay ninguna en juego). Separado del resto de
+      // renderPublicScreen para poder llamarse también desde el ticker de
+      // 10s del carrusel, sin depender de que haya llegado un snapshot
+      // nuevo de Firestore.
+      function renderPublicScreenActiveCard_() {
+        const activeEl = document.getElementById("public-screen-active-tables");
+        if (!activeEl) return;
+        const games = publicScreenActiveGames_;
+        if (!games.length) {
+          activeEl.innerHTML = '<p class="public-screen-empty-note">No hay mesas en juego en este momento.</p>';
+          return;
+        }
+        if (publicScreenCycleIndex_ >= games.length) publicScreenCycleIndex_ = 0;
+        const p = games[publicScreenCycleIndex_];
+        const counterNote =
+          games.length > 1
+            ? ` <span class="public-screen-cycle-counter">(${publicScreenCycleIndex_ + 1}/${games.length})</span>`
+            : "";
+        // El <div> se regenera entero en cada llamada (nuevo nodo), así que
+        // la animación CSS de la barra de progreso arranca sola de nuevo
+        // cada vez, sin necesidad de reiniciarla a mano desde JS.
+        activeEl.innerHTML = `
+          <div class="public-screen-active-row public-screen-active-row-cycle">
+            <span class="public-screen-board-badge">Mesa ${p.board}${counterNote}</span>
+            <span class="public-screen-vs">${escapePublicScreenHtml_(p.whiteName)} vs ${escapePublicScreenHtml_(p.blackName)}</span>
+          </div>
+          ${games.length > 1 ? '<div class="public-screen-cycle-progress"><div class="public-screen-cycle-progress-bar"></div></div>' : ""}
+        `;
+      }
+
       function renderPublicScreen(state) {
         const emptyEl = document.getElementById("public-screen-empty");
         const contentEl = document.getElementById("public-screen-content");
@@ -7792,7 +7993,11 @@
         const hasTournament = !!(state && (state.meta.status === "active" || state.meta.status === "finished"));
         emptyEl.style.display = hasTournament ? "none" : "";
         contentEl.style.display = hasTournament ? "" : "none";
-        if (!hasTournament) return;
+        if (!hasTournament) {
+          stopPublicScreenCycle_();
+          publicScreenActiveGames_ = [];
+          return;
+        }
 
         const isFinished = state.meta.status === "finished";
         const roundsNote = state.meta.totalRounds ? ` de ${state.meta.totalRounds}` : "";
@@ -7855,22 +8060,25 @@
 
         // Mesas activas: emparejamientos de la ronda actual que todavía no
         // tienen resultado cargado (no incluye byes, que quedan resueltos
-        // apenas se genera la ronda).
+        // apenas se genera la ronda). Se muestran de a una en un carrusel
+        // (ver renderPublicScreenActiveCard_/advancePublicScreenCycle_) en
+        // vez de listadas todas juntas, para que se lean bien en un
+        // proyector aunque haya muchas mesas.
         const currentRoundPairings = state.pairings.filter((p) => p.round === state.meta.round);
         const activePairings = currentRoundPairings.filter((p) => p.blackId !== "" && !p.result).sort((a, b) => a.board - b.board);
-        const activeEl = document.getElementById("public-screen-active-tables");
-        if (!activePairings.length) {
-          activeEl.innerHTML = '<p class="public-screen-empty-note">No hay mesas en juego en este momento.</p>';
+        // Si la mesa que se estaba mostrando sigue en juego (por ejemplo,
+        // acaba de cargarse el resultado de OTRA mesa), mantenemos la
+        // posición del carrusel en vez de saltar siempre a la primera.
+        const previousGame = publicScreenActiveGames_[publicScreenCycleIndex_];
+        const previousKey = previousGame ? publicScreenGameKey_(previousGame) : null;
+        publicScreenActiveGames_ = activePairings;
+        const keptIndex = previousKey ? activePairings.findIndex((p) => publicScreenGameKey_(p) === previousKey) : -1;
+        publicScreenCycleIndex_ = keptIndex !== -1 ? keptIndex : 0;
+        renderPublicScreenActiveCard_();
+        if (activePairings.length > 1) {
+          startPublicScreenCycleIfNeeded_();
         } else {
-          activeEl.innerHTML = activePairings
-            .map(
-              (p) => `
-                <div class="public-screen-active-row">
-                  <span class="public-screen-board-badge">Mesa ${p.board}</span>
-                  <span class="public-screen-vs">${escapePublicScreenHtml_(p.whiteName)} vs ${escapePublicScreenHtml_(p.blackName)}</span>
-                </div>`
-            )
-            .join("");
+          stopPublicScreenCycle_();
         }
 
         // Resultados recientes: partidas con resultado cargado, empezando
@@ -8911,6 +9119,37 @@
       document.getElementById("tournament-announcement-history-toggle").addEventListener("click", () => {
         const listEl = document.getElementById("tournament-announcement-history-list");
         listEl.style.display = listEl.style.display === "none" ? "" : "none";
+      });
+
+      document.querySelectorAll("#tournament-round-countdown-composer [data-countdown-minutes]").forEach((btn) => {
+        btn.addEventListener("click", async () => {
+          try {
+            await fbSetRoundCountdown(Number(btn.dataset.countdownMinutes));
+            toast("⏳ Countdown iniciado");
+          } catch (err) {
+            showError(err);
+          }
+        });
+      });
+
+      document.getElementById("tournament-round-countdown-start-btn").addEventListener("click", async () => {
+        const inputEl = document.getElementById("tournament-round-countdown-custom-minutes");
+        try {
+          await fbSetRoundCountdown(Number(inputEl.value));
+          inputEl.value = "";
+          toast("⏳ Countdown iniciado");
+        } catch (err) {
+          showError(err);
+        }
+      });
+
+      document.getElementById("tournament-round-countdown-cancel-btn").addEventListener("click", async () => {
+        try {
+          await fbCancelRoundCountdown();
+          toast("⏳ Countdown cancelado");
+        } catch (err) {
+          showError(err);
+        }
       });
 
       document.getElementById("tournament-settings-btn").addEventListener("click", () => {
