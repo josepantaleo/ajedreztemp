@@ -1109,6 +1109,22 @@
         }
       }
 
+      .announcement-history-item {
+        display: flex;
+        justify-content: space-between;
+        gap: 10px;
+        padding: 6px 0;
+        border-bottom: 1px solid var(--surface2);
+      }
+      .announcement-history-item:last-child {
+        border-bottom: none;
+      }
+      .announcement-history-time {
+        color: var(--muted);
+        font-size: 12px;
+        white-space: nowrap;
+      }
+
       /* Controles: parte del flujo normal (ya no position:fixed),
          así nunca se superponen al tablero ni quedan cortados */
       body.fullscreen-game .controls-panel ,

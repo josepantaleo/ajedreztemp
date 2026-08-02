@@ -4489,6 +4489,7 @@
       let announcementsCollectionRef = null;
       let announcementsUnsub = null;
       let lastAnnouncementId_ = null; // último anuncio ya mostrado, para no repetir el toast
+      let announcementHistory_ = []; // últimos anuncios (más nuevo primero), para el listado desplegable
 
       function assertAdminOrReferee() {
         if (!isCurrentUserAdmin(lastTournamentState) && !isCurrentUserReferee()) {
@@ -4502,28 +4503,25 @@
           announcementsUnsub = null;
         }
         lastAnnouncementId_ = null;
+        announcementHistory_ = [];
         let firstSnapshot = true;
         announcementsUnsub = announcementsCollectionRef
           .orderBy("ts", "desc")
-          .limit(1)
+          .limit(10)
           .onSnapshot(
             (qsnap) => {
-              const doc = qsnap.docs[0];
-              if (!doc) {
-                renderAnnouncementBanner_(null);
-                firstSnapshot = false;
-                return;
-              }
-              const data = doc.data();
-              renderAnnouncementBanner_(data);
+              announcementHistory_ = qsnap.docs.map((d) => ({ id: d.id, ...d.data() }));
+              renderAnnouncementHistory_();
+              const top = announcementHistory_[0] || null;
+              renderAnnouncementBanner_(top);
               // No mostramos el toast del anuncio que ya estaba puesto al
               // conectarnos (firstSnapshot), solo los que llegan después,
               // para no interrumpir a alguien que recién entra al torneo.
-              if (!firstSnapshot && doc.id !== lastAnnouncementId_) {
-                toast("📢 " + (data.text || ""), 6000);
+              if (!firstSnapshot && top && top.id !== lastAnnouncementId_) {
+                toast("📢 " + (top.text || ""), 6000);
                 SoundFX.announcement();
               }
-              lastAnnouncementId_ = doc.id;
+              lastAnnouncementId_ = top ? top.id : null;
               firstSnapshot = false;
             },
             () => {
@@ -4550,6 +4548,42 @@
         announcementBannerTimer_ = setTimeout(() => {
           bannerEl.style.display = "none";
         }, 6000);
+      }
+
+      // Formatea la hora de un anuncio para el listado desplegable. ts es un
+      // Timestamp de Firestore (o null en el instante entre el add() local y
+      // que vuelva el valor real del servidor).
+      function formatAnnouncementTime_(ts) {
+        if (!ts || typeof ts.toDate !== "function") return "";
+        return ts.toDate().toLocaleTimeString("es-AR", { hour: "2-digit", minute: "2-digit" });
+      }
+
+      function escapeAnnouncementHtml_(s) {
+        return String(s || "").replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
+      }
+
+      function renderAnnouncementHistory_() {
+        const toggleBtn = document.getElementById("tournament-announcement-history-toggle");
+        const listEl = document.getElementById("tournament-announcement-history-list");
+        if (!toggleBtn || !listEl) return;
+        if (!announcementHistory_.length) {
+          toggleBtn.style.display = "none";
+          listEl.style.display = "none";
+          return;
+        }
+        toggleBtn.style.display = "";
+        toggleBtn.textContent = `📋 Ver anuncios (${announcementHistory_.length})`;
+        listEl.innerHTML = announcementHistory_
+          .map((a) => {
+            const time = formatAnnouncementTime_(a.ts);
+            return (
+              `<div class="announcement-history-item">` +
+              `<span class="announcement-history-text">${escapeAnnouncementHtml_(a.text)}</span>` +
+              (time ? `<span class="announcement-history-time">${time}</span>` : "") +
+              `</div>`
+            );
+          })
+          .join("");
       }
 
       async function sendTournamentAnnouncement(text) {
@@ -8872,6 +8906,11 @@
         } catch (err) {
           showError(err);
         }
+      });
+
+      document.getElementById("tournament-announcement-history-toggle").addEventListener("click", () => {
+        const listEl = document.getElementById("tournament-announcement-history-list");
+        listEl.style.display = listEl.style.display === "none" ? "" : "none";
       });
 
       document.getElementById("tournament-settings-btn").addEventListener("click", () => {
