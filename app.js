@@ -1184,7 +1184,9 @@
       function renderCapturedMaterial() {
         const capturedWEl = document.getElementById("captured-w");
         const capturedBEl = document.getElementById("captured-b");
-        if (!capturedWEl && !capturedBEl) return; // esta pantalla no tiene el panel (ej. análisis)
+        const capturedWFloatEl = document.getElementById("captured-w-float");
+        const capturedBFloatEl = document.getElementById("captured-b-float");
+        if (!capturedWEl && !capturedBEl && !capturedWFloatEl && !capturedBFloatEl) return; // esta pantalla no tiene el panel (ej. análisis)
 
         // IMPORTANTE: no usamos game.history() para esto. En una partida de
         // torneo, cada actualización llega como un FEN nuevo y se carga con
@@ -1246,12 +1248,12 @@
 
         // Piezas negras capturadas se muestran del lado de las blancas (lo
         // que ganaron), y viceversa.
-        if (capturedWEl) {
-          capturedWEl.innerHTML = glyphsHtml(missingBlack, "b") + advantageHtml(diff > 0 ? diff : 0);
-        }
-        if (capturedBEl) {
-          capturedBEl.innerHTML = glyphsHtml(missingWhite, "w") + advantageHtml(diff < 0 ? -diff : 0);
-        }
+        const wHtml = glyphsHtml(missingBlack, "b") + advantageHtml(diff > 0 ? diff : 0);
+        const bHtml = glyphsHtml(missingWhite, "w") + advantageHtml(diff < 0 ? -diff : 0);
+        if (capturedWEl) capturedWEl.innerHTML = wHtml;
+        if (capturedBEl) capturedBEl.innerHTML = bHtml;
+        if (capturedWFloatEl) capturedWFloatEl.innerHTML = wHtml;
+        if (capturedBFloatEl) capturedBFloatEl.innerHTML = bHtml;
       }
 
       function updateEvalBar() {
@@ -4532,16 +4534,22 @@
           );
       }
 
+      let announcementBannerTimer_ = null;
+
       function renderAnnouncementBanner_(data) {
         const bannerEl = document.getElementById("tournament-announcement-banner");
         const textEl = document.getElementById("tournament-announcement-text");
         if (!bannerEl || !textEl) return;
+        clearTimeout(announcementBannerTimer_);
         if (!data || !data.text) {
           bannerEl.style.display = "none";
           return;
         }
         textEl.textContent = data.text;
         bannerEl.style.display = "";
+        announcementBannerTimer_ = setTimeout(() => {
+          bannerEl.style.display = "none";
+        }, 6000);
       }
 
       async function sendTournamentAnnouncement(text) {
@@ -8412,6 +8420,15 @@
       }
 
       async function enterTournamentMatch(round, board, whiteName, blackName, whiteEmail, blackEmail) {
+        // Pantalla completa real automática al entrar a una mesa de torneo
+        // (antes solo se activaba si el jugador tocaba el botón "Pantalla
+        // completa" a mano). Se hace ACÁ, antes de cualquier await, para
+        // que el navegador todavía la reconozca como resultado directo del
+        // toque/click que abrió la mesa (si no, Safari/iOS la rechaza).
+        document.body.classList.add("fullscreen-game");
+        const fsBtn_ = document.getElementById("game-fullscreen");
+        if (fsBtn_) fsBtn_.textContent = fsBtn_.dataset.exitText || "❎ Salir";
+        document.documentElement.requestFullscreen().catch(() => {});
         try {
           // Se lee directo el documento de esa mesa (ver gamesCollectionRef)
           // en vez de buscarlo dentro de un state.games que ya no existe;

@@ -1063,6 +1063,52 @@
         overflow: hidden;
       }
 
+      /* Piezas capturadas flotantes: solo existen visualmente en modo
+         pantalla completa / tablero maximizado, donde .right (el panel
+         normal de "Material capturado") queda oculto. Fuera de esos modos
+         se muestra el panel de siempre en .right, así que esto se mantiene
+         display:none por defecto. */
+      #captured-floating {
+        display: none;
+      }
+      body.fullscreen-game #captured-floating,
+      body.tournament-board-max #captured-floating {
+        display: flex;
+        flex-direction: column;
+        gap: 10px;
+        position: fixed;
+        left: 16px;
+        top: 50%;
+        transform: translateY(-50%);
+        z-index: 20;
+        background: linear-gradient(145deg, #183354, #081120);
+        border: 1px solid rgba(92, 200, 255, 0.22);
+        border-radius: 14px;
+        padding: 10px 12px;
+        box-shadow: 0 20px 50px rgba(0, 0, 0, 0.5);
+        max-width: 120px;
+      }
+      .captured-floating-row {
+        display: flex;
+        flex-direction: column;
+        gap: 4px;
+      }
+      .captured-floating-label {
+        font-size: 11px;
+        font-weight: 600;
+        color: var(--muted);
+        text-transform: uppercase;
+        letter-spacing: 0.03em;
+      }
+      @media (max-width: 900px) {
+        body.fullscreen-game #captured-floating,
+        body.tournament-board-max #captured-floating {
+          left: 6px;
+          padding: 8px;
+          max-width: 84px;
+        }
+      }
+
       /* Controles: parte del flujo normal (ya no position:fixed),
          así nunca se superponen al tablero ni quedan cortados */
       body.fullscreen-game .controls-panel ,
