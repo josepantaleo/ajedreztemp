@@ -2495,8 +2495,6 @@
         document.body.dataset.theme = current;
         localStorage.setItem("chessTheme", current);
         document.getElementById("current-theme-name").textContent = THEMES[current];
-        const themeNameCfg = document.getElementById("current-theme-name-cfg");
-        if (themeNameCfg) themeNameCfg.textContent = THEMES[current];
         document.querySelectorAll("[data-theme-card]").forEach(c => {
           c.classList.toggle("active", c.dataset.themeCard === current);
         });
