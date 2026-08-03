@@ -9,6 +9,21 @@
         levelLabel,
       } from "./utils.js";
 
+      // PWA: registra el service worker que cachea el "app shell" (ver
+      // sw.js) para que la app se pueda instalar y las lecciones/
+      // ejercicios funcionen sin conexión. Los "if" de abajo evitan
+      // romper en navegadores viejos sin soporte, o si se abre el
+      // archivo directo desde disco (file://) en vez de servido por http.
+      if ("serviceWorker" in navigator && location.protocol.startsWith("http")) {
+        window.addEventListener("load", () => {
+          navigator.serviceWorker.register("./sw.js").catch(() => {
+            // Silencioso: si falla el registro (por ejemplo, servidor sin
+            // HTTPS en un dominio que no sea localhost), la app sigue
+            // funcionando normal, solo sin instalación/offline.
+          });
+        });
+      }
+
       // Instrumentación temporal de rendimiento (mediciones con
       // performance.now/JSON.stringify y sus console.log asociados), usada
       // en su momento para diagnosticar cuellos de botella en el torneo.
@@ -1740,6 +1755,18 @@
       let clockTimer = null;
       let clock = { w: 300, b: 300 };
       let clockEnabled = false;
+      // Reloj local ("Jugar"): antes se restaba 1 segundo por cada tick de
+      // setInterval(...,1000). En mobile, cuando el navegador pasa a
+      // segundo plano (se bloquea la pantalla, se cambia de app), el
+      // sistema operativo pausa/frena esos intervalos para ahorrar
+      // batería — al volver, el reloj mostraba más tiempo del que
+      // realmente había pasado. Ahora, igual que el reloj de torneo
+      // (ver updateTournamentClockDisplay), el tiempo restante se calcula
+      // contra un timestamp real (turnStartAt) en vez de contar ticks:
+      // así da igual cuántos ticks se hayan salteado, el cálculo siempre
+      // es correcto en cuanto vuelve a primer plano.
+      let turnStartAt = null;
+      let clockFlagged = false;
 
       // Lee minutos/incremento personalizables a partir de un par
       // select+input (se reutiliza para el reloj de "Jugar" y para el
@@ -1826,10 +1853,20 @@
         // termina pisando (y desincronizando entre pantallas) el reloj
         // del torneo, que comparte los mismos elementos #clock-w/#clock-b.
         if (tournamentMatchActive) return;
-        const increment = getIncrement();
-        if (!increment || !clockEnabled || game.game_over()) return;
         const prevTurn = game.turn() === 'w' ? 'b' : 'w';
-        clock[prevTurn] += increment;
+        // Se "cobra" el tiempo realmente transcurrido en este turno recién
+        // terminado contra el timestamp de cuándo empezó a pensar, no
+        // contra cuántos ticks de 1s llegaron a correr (que en mobile
+        // pueden haberse salteado si la pantalla estuvo bloqueada).
+        if (clockEnabled && turnStartAt) {
+          const elapsed = Math.max(0, Math.round((Date.now() - turnStartAt) / 1000));
+          clock[prevTurn] = Math.max(0, clock[prevTurn] - elapsed);
+        }
+        const increment = getIncrement();
+        if (increment && clockEnabled && !game.game_over()) {
+          clock[prevTurn] += increment;
+        }
+        turnStartAt = clockEnabled ? Date.now() : null;
         updateClockDisplay();
       }
 
@@ -1838,26 +1875,34 @@
         const initial = getInitialTime();
         clockEnabled = initial > 0;
         clock = { w: initial, b: initial };
+        clockFlagged = false;
+        turnStartAt = start && initial > 0 ? Date.now() : null;
 
         if (start && initial > 0) {
+          // El intervalo ya no resta segundos: solo refresca la pantalla
+          // cada 1s. El tiempo real que queda se recalcula siempre contra
+          // turnStartAt (ver getClockRemaining_), así que aunque el
+          // navegador se salte ticks en segundo plano, en cuanto vuelve a
+          // primer plano el próximo tick muestra el valor correcto.
           clockTimer = setInterval(() => {
             if (tournamentMatchActive || game.game_over()) return;
-            const turn = game.turn();
-            clock[turn]--;
-            if (clock[turn] <= 0) {
-              clock[turn] = 0;
-              clearInterval(clockTimer);
-              const winner = turn === 'w' ? 'Negras' : 'Blancas';
-              state.games++;
-              const record = saveFinishedGame(`Tiempo agotado · Ganaron las ${winner}`);
-              save();
-              showAlert(`⏱️ Tiempo agotado. Ganaron las ${winner}.`);
-              if (record) offerAnalysis(record.id);
-            }
             updateClockDisplay();
           }, 1000);
         }
         updateClockDisplay();
+      }
+
+      // Tiempo restante real de un color: si es su turno, se descuenta el
+      // tiempo transcurrido desde turnStartAt (cálculo por timestamp, no
+      // por conteo de ticks); si no es su turno, el valor guardado no
+      // cambia.
+      function getClockRemaining_(color) {
+        if (!clockEnabled) return clock[color];
+        if (game.turn() === color && turnStartAt && !game.game_over()) {
+          const elapsed = Math.max(0, Math.round((Date.now() - turnStartAt) / 1000));
+          return Math.max(0, clock[color] - elapsed);
+        }
+        return clock[color];
       }
 
       function updateClockDisplay() {
@@ -1872,10 +1917,28 @@
         renderBoardAvatars_();
         const wTime = w.querySelector(".clock-time");
         const bTime = b.querySelector(".clock-time");
-        (wTime || w).textContent = formatTime(clock.w);
-        (bTime || b).textContent = formatTime(clock.b);
+        const wSecs = getClockRemaining_("w");
+        const bSecs = getClockRemaining_("b");
+        (wTime || w).textContent = formatTime(wSecs);
+        (bTime || b).textContent = formatTime(bSecs);
         w.classList.toggle("active", game.turn() === "w" && !game.game_over());
         b.classList.toggle("active", game.turn() === "b" && !game.game_over());
+
+        if (clockEnabled && !clockFlagged && !game.game_over()) {
+          const turn = game.turn();
+          const remaining = turn === "w" ? wSecs : bSecs;
+          if (remaining <= 0) {
+            clockFlagged = true;
+            clock[turn] = 0;
+            clearInterval(clockTimer);
+            const winner = turn === "w" ? "Negras" : "Blancas";
+            state.games++;
+            const record = saveFinishedGame(`Tiempo agotado · Ganaron las ${winner}`);
+            save();
+            showAlert(`⏱️ Tiempo agotado. Ganaron las ${winner}.`);
+            if (record) offerAnalysis(record.id);
+          }
+        }
       }
 
 
@@ -7287,6 +7350,56 @@
       // arranca/para desde renderTournamentState en cada actualización de
       // estado, igual que el temporizador de aprobación automática.
       let tournamentWOGraceTimer = null;
+      // Mesas donde YA se avisó al árbitro que ninguno de los dos jugadores
+      // se presentó (ver checkDoubleNoShowBoards_ más abajo). No se declara
+      // WO automático en este caso —puede deberse a un problema de conexión
+      // que afecte a ambos por igual, y ahí sí conviene que lo revise una
+      // persona—, pero antes quedaba en silencio hasta que el árbitro
+      // entrara a mirar la lista de mesas. Este Set evita mandar el mismo
+      // aviso cada 15s mientras la mesa siga sin resolverse.
+      let alertedDoubleNoShowBoards_ = new Set();
+
+      // A diferencia de fbAutoDeclareForfeits (que sí declara WO cuando
+      // entró exactamente uno de los dos), acá el caso es que NINGUNO de
+      // los dos entró pasado el tiempo de tolerancia. A propósito no se
+      // declara ganador automático: puede ser que los dos tengan un
+      // problema real (conexión, se equivocaron de horario, etc.) y
+      // conviene que un humano lo mire antes de darle el punto a alguien
+      // sin partida. Lo que sí se puede hacer es avisarle al árbitro en
+      // vez de dejarlo en silencio hasta que entre a mirar la lista de
+      // mesas a mano.
+      function checkDoubleNoShowBoards_(state) {
+        const graceMinutes = Number(state.meta.woGraceMinutes) || 0;
+        if (!graceMinutes) return;
+        const graceMs = graceMinutes * 60000;
+        const now = Date.now();
+        const round = state.meta.round;
+        const gamesByBoard = new Map();
+        lastRoundGames.forEach((g) => gamesByBoard.set(g.board, g));
+
+        state.pairings
+          .filter((p) => p.round === round && p.blackId !== "" && !p.result)
+          .forEach((p) => {
+            const game = gamesByBoard.get(p.board);
+            const joined = (game && game.joined) || { w: false, b: false };
+            const key = round + "_" + p.board;
+            const isDoubleNoShow =
+              game && game.status === "ongoing" && game.startedAt && !joined.w && !joined.b && now - game.startedAt >= graceMs;
+            if (isDoubleNoShow) {
+              if (!alertedDoubleNoShowBoards_.has(key)) {
+                alertedDoubleNoShowBoards_.add(key);
+                toast(
+                  `🔴 Mesa #${p.board}: ni ${p.whiteName} ni ${p.blackName} se presentaron. No se declaró WO automático — revisalo a mano.`
+                );
+              }
+            } else {
+              // Si alguno terminó entrando (o la mesa se resolvió de otra
+              // forma), se saca del set para poder volver a avisar si en
+              // el futuro pasara algo raro parecido en la misma mesa.
+              alertedDoubleNoShowBoards_.delete(key);
+            }
+          });
+      }
 
       function stopWOGraceTimer() {
         clearInterval(tournamentWOGraceTimer);
@@ -7313,6 +7426,15 @@
           } catch (err) {
             // Silencioso: puede fallar si otra pestaña ya resolvió lo mismo,
             // o si el estado cambió (ronda cerrada, torneo terminado, etc.).
+          }
+          // Chequeo de "ninguno se presentó" aparte: es una simple lectura
+          // del estado que ya tenemos suscripto (no pega contra Firestore),
+          // así que conviene que corra siempre, incluso si fbAutoDeclareForfeits
+          // de arriba falló por el motivo que sea.
+          try {
+            if (lastTournamentState) checkDoubleNoShowBoards_(lastTournamentState);
+          } catch (err) {
+            // Silencioso por la misma razón que arriba.
           }
         };
         tick();
@@ -7746,6 +7868,22 @@
           } else if (game && game.status === "suspended") {
             statusCls = "suspended";
             statusText = "⏸️ Suspendida";
+          } else if (
+            graceMinutes > 0 &&
+            game &&
+            game.status === "ongoing" &&
+            game.startedAt &&
+            !joinedInfo.w &&
+            !joinedInfo.b &&
+            Date.now() - game.startedAt >= graceMinutes * 60000
+          ) {
+            // Caso distinto del "esperando jugadores" normal: acá ya pasó
+            // el tiempo reglamentario y NINGUNO de los dos entró. No se
+            // resuelve solo (ver checkDoubleNoShowBoards_), así que se
+            // marca fuerte para que el árbitro lo vea de un vistazo en la
+            // lista, no solo en el toast que ya recibió cuando pasó.
+            statusCls = "no-show";
+            statusText = "🔴 Nadie se presentó";
           } else if (game && game.clock && !bothJoined) {
             statusCls = "waiting";
             statusText = "🟡 Esperando jugadores";

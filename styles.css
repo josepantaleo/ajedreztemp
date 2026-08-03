@@ -59,6 +59,7 @@
 
       @media (prefers-reduced-motion: reduce) {
         body::before { animation: none; }
+        .pairing-status-no-show { animation: none; }
       }
 
       @keyframes bgDrift {
@@ -2811,6 +2812,17 @@
       .pairing-status-suspended {
         background: rgba(249, 115, 22, 0.18);
         color: #f97316;
+      }
+
+      .pairing-status-no-show {
+        background: rgba(239, 107, 115, 0.22);
+        color: var(--danger);
+        animation: noShowPulse 1.6s ease-in-out infinite;
+      }
+
+      @keyframes noShowPulse {
+        0%, 100% { box-shadow: 0 0 0 0 rgba(239, 107, 115, 0.45); }
+        50% { box-shadow: 0 0 0 5px rgba(239, 107, 115, 0); }
       }
 
       .pairing-status-pending {
