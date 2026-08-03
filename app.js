@@ -6681,7 +6681,7 @@
         return getTournamentStateOnce();
       }
 
-      async function fbMakeMove(round, board, fen, lastMoveSan, gameOverResult, lastFrom, lastTo, clientMoveAt) {
+      async function fbMakeMove(round, board, fen, lastMoveSan, gameOverResult, lastFrom, lastTo, clientMoveAt, isTimeoutClaim) {
         round = Number(round);
         board = Number(board);
         // Sello de tiempo tomado en el cliente apenas se hizo la jugada
@@ -6699,21 +6699,22 @@
         const effectiveMoveAt = Math.min(clientMoveAt || Date.now(), Date.now());
         const gameDocRef = gamesCollectionRef.doc(gameDocId_(round, board));
 
-        // ATAJO para partidas SIN reloj: no hay tiempo que descontar ni
-        // incrementar, así que no necesitamos leer el documento antes de
-        // escribir. runTransaction() siempre implica un round-trip de
-        // LECTURA más otro de ESCRITURA (nunca se resuelve con la caché
-        // local); acá nos alcanza con el estado que ya tenemos cacheado en
-        // el cliente (llega en tiempo real por subscribeRoundGames, con
-        // latencia propia de Firestore pero sin costo extra nuestro) y
-        // escribimos directo con un solo update(), la mitad de los
-        // round-trips por jugada. Si la partida hubiera cambiado de estado
-        // en el servidor un instante antes (por ejemplo la suspendió el
-        // árbitro), el chequeo de status queda un poco más "optimista",
-        // pero para una partida casual sin reloj ese riesgo es aceptable a
-        // cambio de que cada jugada se sienta instantánea. Las partidas
-        // CON reloj siguen abajo por la transacción, porque ahí sí hace
-        // falta leer el reloj/turnStartAt anteriores para descontar bien.
+        // ATAJO para todo lo que NO sea un reclamo de tiempo agotado
+        // (jugada normal, jaque mate, tablas, rendición), tenga o no
+        // reloj la partida: en el camino caliente de cada jugada, quien
+        // escribe este documento es SIEMPRE el mismo jugador que acaba de
+        // mover, nunca compite con otro cliente escribiendo el mismo
+        // documento a la vez (la única excepción real es justo el reclamo
+        // de tiempo, que por eso sigue yendo por la transacción de abajo).
+        // Al no haber carrera posible acá, no hace falta pagar el
+        // round-trip de LECTURA que exige runTransaction(): nos alcanza
+        // con el reloj/estado que ya tenemos cacheado en el cliente
+        // (actualizado en tiempo real por subscribeRoundGames) para
+        // calcular el descuento de tiempo nosotros mismos, y escribimos
+        // directo con un solo update(). Eso deja la transacción SOLO en
+        // claimTournamentTimeout (ver isTimeoutClaim), que es el único
+        // punto donde de verdad puede haber dos clientes escribiendo el
+        // mismo documento casi al mismo tiempo.
         const cachedGame =
           lastRoundGames.find((g) => g.round === round && g.board === board) ||
           (tournamentCurrentGameRow &&
@@ -6721,12 +6722,33 @@
           tournamentCurrentGameRow.board === board
             ? tournamentCurrentGameRow
             : null);
-        if (cachedGame && !cachedGame.clock) {
+        if (cachedGame && !isTimeoutClaim) {
           if (cachedGame.status === "finished") throw new Error("Esa partida ya terminó");
           if (cachedGame.status === "suspended") throw new Error("Esta partida está suspendida por el árbitro");
+
+          const isRealMove = cachedGame.clock && fen !== cachedGame.fen;
+          if (isRealMove) {
+            const joined = cachedGame.joined || { w: false, b: false };
+            if (!joined.w || !joined.b) {
+              throw new Error("Todavía no entraron los dos jugadores a la partida");
+            }
+          }
+
           const patch = { fen, lastMoveSan: lastMoveSan || "" };
           if (lastFrom) patch.lastFrom = lastFrom;
           if (lastTo) patch.lastTo = lastTo;
+          if (isRealMove) {
+            const moverColor = new Chess(cachedGame.fen).turn();
+            const elapsed = cachedGame.turnStartAt
+              ? Math.max(0, Math.round((effectiveMoveAt - cachedGame.turnStartAt) / 1000))
+              : 0;
+            const newClock = { ...cachedGame.clock, [moverColor]: Math.max(0, cachedGame.clock[moverColor] - elapsed) };
+            if (!gameOverResult && cachedGame.increment) {
+              newClock[moverColor] += cachedGame.increment;
+            }
+            patch.clock = newClock;
+            patch.turnStartAt = effectiveMoveAt;
+          }
           if (gameOverResult) {
             patch.status = "finished";
             patch.result = gameOverResult;
@@ -8823,7 +8845,11 @@
             tournamentMatchCtx.board,
             game.fen(),
             game.history().slice(-1)[0] || "",
-            result
+            result,
+            undefined,
+            undefined,
+            undefined,
+            /* isTimeoutClaim */ true
           );
           const gameRow = state.gameRow;
           if (!tournamentResultShown) {
