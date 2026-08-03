@@ -8290,13 +8290,28 @@
               <div class="public-screen-zoom-board-wrap">
                 <div class="board public-screen-zoom-board" id="public-screen-zoom-board"></div>
               </div>
-              <button class="btn" id="public-screen-zoom-close">Cerrar</button>
+              <div class="public-screen-zoom-actions">
+                <button class="btn" id="public-screen-zoom-fullscreen-btn">⛶ Pantalla completa</button>
+                <button class="btn" id="public-screen-zoom-close">Cerrar</button>
+              </div>
             </div>`;
           document.body.appendChild(backdrop);
           backdrop.addEventListener("click", (e) => {
             if (e.target === backdrop) closePublicScreenZoom_();
           });
           document.getElementById("public-screen-zoom-close").addEventListener("click", closePublicScreenZoom_);
+          // Pantalla completa SOLO del modal (tablero + nombres), no de
+          // toda la pestaña: útil para dejarlo proyectado en un momento
+          // puntual de una mesa sin tener que salir antes de la pantalla
+          // pública general (ver public-screen-fullscreen-btn más abajo,
+          // mismo patrón con la Fullscreen API nativa).
+          document.getElementById("public-screen-zoom-fullscreen-btn").addEventListener("click", () => {
+            if (document.fullscreenElement) {
+              document.exitFullscreen();
+            } else if (backdrop.requestFullscreen) {
+              backdrop.requestFullscreen();
+            }
+          });
         }
         backdrop.style.display = "flex";
         renderPublicScreenZoomBoard_();
@@ -8305,7 +8320,15 @@
       function closePublicScreenZoom_() {
         publicScreenZoomKey_ = null;
         const backdrop = document.getElementById("public-screen-zoom-backdrop");
-        if (backdrop) backdrop.style.display = "none";
+        if (backdrop) {
+          // Si el modal quedó en pantalla completa, salimos de ese modo
+          // antes de ocultarlo: si no, el navegador queda "atascado" en
+          // fullscreen mostrando un elemento con display:none.
+          if (document.fullscreenElement === backdrop) {
+            document.exitFullscreen().catch(() => {});
+          }
+          backdrop.style.display = "none";
+        }
         // Al cerrar, retomamos el carrusel automático (si hay más de una
         // mesa en juego; con una sola no hace falta ciclar nada).
         if (publicScreenActiveGames_.length > 1) startPublicScreenCycleIfNeeded_();
