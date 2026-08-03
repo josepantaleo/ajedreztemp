@@ -6698,6 +6698,49 @@
         // dudas a que nunca sea posterior al "ahora" real.
         const effectiveMoveAt = Math.min(clientMoveAt || Date.now(), Date.now());
         const gameDocRef = gamesCollectionRef.doc(gameDocId_(round, board));
+
+        // ATAJO para partidas SIN reloj: no hay tiempo que descontar ni
+        // incrementar, así que no necesitamos leer el documento antes de
+        // escribir. runTransaction() siempre implica un round-trip de
+        // LECTURA más otro de ESCRITURA (nunca se resuelve con la caché
+        // local); acá nos alcanza con el estado que ya tenemos cacheado en
+        // el cliente (llega en tiempo real por subscribeRoundGames, con
+        // latencia propia de Firestore pero sin costo extra nuestro) y
+        // escribimos directo con un solo update(), la mitad de los
+        // round-trips por jugada. Si la partida hubiera cambiado de estado
+        // en el servidor un instante antes (por ejemplo la suspendió el
+        // árbitro), el chequeo de status queda un poco más "optimista",
+        // pero para una partida casual sin reloj ese riesgo es aceptable a
+        // cambio de que cada jugada se sienta instantánea. Las partidas
+        // CON reloj siguen abajo por la transacción, porque ahí sí hace
+        // falta leer el reloj/turnStartAt anteriores para descontar bien.
+        const cachedGame =
+          lastRoundGames.find((g) => g.round === round && g.board === board) ||
+          (tournamentCurrentGameRow &&
+          tournamentCurrentGameRow.round === round &&
+          tournamentCurrentGameRow.board === board
+            ? tournamentCurrentGameRow
+            : null);
+        if (cachedGame && !cachedGame.clock) {
+          if (cachedGame.status === "finished") throw new Error("Esa partida ya terminó");
+          if (cachedGame.status === "suspended") throw new Error("Esta partida está suspendida por el árbitro");
+          const patch = { fen, lastMoveSan: lastMoveSan || "" };
+          if (lastFrom) patch.lastFrom = lastFrom;
+          if (lastTo) patch.lastTo = lastTo;
+          if (gameOverResult) {
+            patch.status = "finished";
+            patch.result = gameOverResult;
+          }
+          await gameDocRef.update(patch);
+          const writtenGame = { ...cachedGame, ...patch };
+          if (!gameOverResult) {
+            return { gameRow: writtenGame };
+          }
+          const fastState = await fbSubmitResult(round, board, gameOverResult);
+          fastState.gameRow = writtenGame;
+          return fastState;
+        }
+
         let writtenGame = null;
         await fbDb.runTransaction(async (tx) => {
           const snap = await tx.get(gameDocRef);
