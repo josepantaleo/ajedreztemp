@@ -4559,6 +4559,7 @@
       let publicScreenActiveGames_ = []; // mesas activas de la ronda actual, orden fijo por número de mesa
       let publicScreenCycleIndex_ = 0; // índice dentro de publicScreenActiveGames_ que se está mostrando ahora
       let publicScreenCycleTimer_ = null;
+      let publicScreenZoomKey_ = null; // "round-board" de la mesa abierta en el modal de zoom, o null si está cerrado
 
       // --- Countdown de ronda sincronizado con el reloj del servidor ---
       // Firestore no tiene un equivalente al ".info/serverTimeOffset" de
@@ -5576,6 +5577,11 @@
             if (!tournamentMatchActive) {
               renderTournamentState(lastTournamentState);
             }
+            // Si hay una mesa abierta en el modal de zoom de la pantalla
+            // pública, la repintamos con el FEN recién llegado (esto no
+            // toca nada si el modal está cerrado: la función se sale sola
+            // si publicScreenZoomKey_ es null).
+            renderPublicScreenZoomBoard_();
             handleLiveMatchUpdate(lastTournamentState);
           },
           () => {
@@ -8137,6 +8143,16 @@
         return p.round + "-" + p.board;
       }
 
+      // Busca el documento en vivo (con el FEN actual) de una mesa, en la
+      // lista que ya mantiene subscribeRoundGames. Puede no estar todavía
+      // (por ejemplo, el primer instante antes de que llegue el primer
+      // snapshot de "games"), así que quien llama debe tener un fallback.
+      function publicScreenLiveGameFor_(p) {
+        return lastRoundGames.find((g) => g.round === p.round && g.board === p.board) || null;
+      }
+
+      const PUBLIC_SCREEN_START_FEN_ = "rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR w KQkq - 0 1";
+
       function stopPublicScreenCycle_() {
         if (publicScreenCycleTimer_) {
           clearInterval(publicScreenCycleTimer_);
@@ -8182,8 +8198,86 @@
             <span class="public-screen-board-badge">Mesa ${p.board}${counterNote}</span>
             <span class="public-screen-vs">${escapePublicScreenHtml_(p.whiteName)} vs ${escapePublicScreenHtml_(p.blackName)}</span>
           </div>
+          <div class="public-screen-mini-board-wrap" id="public-screen-mini-board-wrap" title="Tocá para ver esta mesa en grande">
+            <div class="board public-screen-mini-board" id="public-screen-mini-board"></div>
+          </div>
+          <p class="public-screen-zoom-hint">🔍 Tocá el tablero para verlo en grande</p>
           ${games.length > 1 ? '<div class="public-screen-cycle-progress"><div class="public-screen-cycle-progress-bar"></div></div>' : ""}
         `;
+        // El tablero en miniatura se arma con el mismo FEN "en vivo" que ya
+        // llega por subscribeRoundGames (ver publicScreenLiveGameFor_): no
+        // hace falta ninguna suscripción nueva ni pedir nada extra al
+        // servidor. Si por algún motivo ese FEN todavía no llegó, se
+        // muestra la posición inicial en vez de dejar el tablero vacío.
+        const liveGame = publicScreenLiveGameFor_(p);
+        const fen = (liveGame && liveGame.fen) || PUBLIC_SCREEN_START_FEN_;
+        const miniBoardEl = document.getElementById("public-screen-mini-board");
+        if (miniBoardEl) renderBoardGrid(miniBoardEl, fenBoardToMatrix(fen), {});
+        const wrapEl = document.getElementById("public-screen-mini-board-wrap");
+        if (wrapEl) wrapEl.addEventListener("click", () => openPublicScreenZoom_(p));
+      }
+
+      // Arma (una sola vez) y muestra el modal de "zoom" con el tablero de
+      // una mesa puntual en grande. Pausa el carrusel automático mientras
+      // está abierto -si no, la mesa cambiaría sola cada 10s debajo del
+      // modal, que quedaría desactualizado sin que nadie lo note- y lo
+      // retoma al cerrar (ver closePublicScreenZoom_).
+      function openPublicScreenZoom_(p) {
+        publicScreenZoomKey_ = publicScreenGameKey_(p);
+        stopPublicScreenCycle_();
+        let backdrop = document.getElementById("public-screen-zoom-backdrop");
+        if (!backdrop) {
+          backdrop = document.createElement("div");
+          backdrop.id = "public-screen-zoom-backdrop";
+          backdrop.innerHTML = `
+            <div id="public-screen-zoom-box">
+              <p class="public-screen-zoom-vs" id="public-screen-zoom-vs"></p>
+              <div class="public-screen-zoom-board-wrap">
+                <div class="board public-screen-zoom-board" id="public-screen-zoom-board"></div>
+              </div>
+              <button class="btn" id="public-screen-zoom-close">Cerrar</button>
+            </div>`;
+          document.body.appendChild(backdrop);
+          backdrop.addEventListener("click", (e) => {
+            if (e.target === backdrop) closePublicScreenZoom_();
+          });
+          document.getElementById("public-screen-zoom-close").addEventListener("click", closePublicScreenZoom_);
+        }
+        backdrop.style.display = "flex";
+        renderPublicScreenZoomBoard_();
+      }
+
+      function closePublicScreenZoom_() {
+        publicScreenZoomKey_ = null;
+        const backdrop = document.getElementById("public-screen-zoom-backdrop");
+        if (backdrop) backdrop.style.display = "none";
+        // Al cerrar, retomamos el carrusel automático (si hay más de una
+        // mesa en juego; con una sola no hace falta ciclar nada).
+        if (publicScreenActiveGames_.length > 1) startPublicScreenCycleIfNeeded_();
+      }
+
+      // Redibuja el tablero del modal de zoom con el FEN más reciente.
+      // Se llama tanto al abrirlo como cada vez que llega una jugada nueva
+      // (desde subscribeRoundGames) o cambia la lista de mesas activas
+      // (desde renderPublicScreen), para que se vea la partida EN VIVO en
+      // vez de una foto fija del momento en que se abrió.
+      function renderPublicScreenZoomBoard_() {
+        if (!publicScreenZoomKey_) return;
+        const backdrop = document.getElementById("public-screen-zoom-backdrop");
+        const p = publicScreenActiveGames_.find((g) => publicScreenGameKey_(g) === publicScreenZoomKey_);
+        if (!p || !backdrop) {
+          // La mesa que se estaba mirando ya no está en juego (terminó la
+          // partida, cambió la ronda, o se reinició el torneo): se cierra
+          // sola en vez de quedar mostrando algo que ya no corresponde.
+          closePublicScreenZoom_();
+          return;
+        }
+        const vsEl = document.getElementById("public-screen-zoom-vs");
+        if (vsEl) vsEl.textContent = `Mesa ${p.board} — ${p.whiteName} vs ${p.blackName}`;
+        const liveGame = publicScreenLiveGameFor_(p);
+        const fen = (liveGame && liveGame.fen) || PUBLIC_SCREEN_START_FEN_;
+        const boardEl = document.getElementById("public-screen-zoom-board");
+        if (boardEl) renderBoardGrid(boardEl, fenBoardToMatrix(fen), {});
       }
 
       function renderPublicScreen(state) {
@@ -8196,6 +8290,9 @@
         contentEl.style.display = hasTournament ? "" : "none";
         if (!hasTournament) {
           stopPublicScreenCycle_();
+          publicScreenZoomKey_ = null;
+          const zoomBackdrop = document.getElementById("public-screen-zoom-backdrop");
+          if (zoomBackdrop) zoomBackdrop.style.display = "none";
           publicScreenActiveGames_ = [];
           return;
         }
@@ -8276,9 +8373,10 @@
         const keptIndex = previousKey ? activePairings.findIndex((p) => publicScreenGameKey_(p) === previousKey) : -1;
         publicScreenCycleIndex_ = keptIndex !== -1 ? keptIndex : 0;
         renderPublicScreenActiveCard_();
-        if (activePairings.length > 1) {
+        renderPublicScreenZoomBoard_();
+        if (activePairings.length > 1 && !publicScreenZoomKey_) {
           startPublicScreenCycleIfNeeded_();
-        } else {
+        } else if (!publicScreenZoomKey_) {
           stopPublicScreenCycle_();
         }
 
