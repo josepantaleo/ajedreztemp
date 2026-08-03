@@ -8156,6 +8156,37 @@
 
       const PUBLIC_SCREEN_START_FEN_ = "rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR w KQkq - 0 1";
 
+      // Pinta un tablero (mini o de zoom) de la pantalla pública a partir de
+      // un FEN. A diferencia de renderBoardGrid (pensado para los diagramas
+      // de puzzles/análisis, con su propio esquema de color fijo), acá
+      // usamos las mismas clases "white-piece"/"black-piece" + data-piece
+      // que arma el tablero principal (ver render(), línea ~1149): así el
+      // tablerito respeta el estilo de fichas que el usuario tenga elegido
+      // (pstyle-bold, pstyle-neon, etc. -ver applyPieceStyle-, aplicado
+      // como clase en <body>) en vez de mostrar siempre los mismos colores
+      // fijos sin importar el tema.
+      function renderPublicScreenBoardInto_(boardEl, fen) {
+        const matrix = fenBoardToMatrix(fen);
+        boardEl.innerHTML = "";
+        for (let r = 0; r < 8; r++) {
+          for (let c = 0; c < 8; c++) {
+            const sqName = FILES[c] + (8 - r);
+            const sq = document.createElement("div");
+            sq.className = "square " + ((r + c) % 2 ? "dark" : "light");
+            sq.dataset.square = sqName;
+            const p = matrix[r][c];
+            if (p) {
+              const piece = document.createElement("div");
+              piece.className = "piece " + (p.color === "w" ? "white-piece" : "black-piece");
+              piece.textContent = PIECES[p.color + p.type.toUpperCase()];
+              piece.dataset.piece = p.type.toUpperCase();
+              sq.appendChild(piece);
+            }
+            boardEl.appendChild(sq);
+          }
+        }
+      }
+
       function stopPublicScreenCycle_() {
         if (publicScreenCycleTimer_) {
           clearInterval(publicScreenCycleTimer_);
@@ -8215,7 +8246,7 @@
         const liveGame = publicScreenLiveGameFor_(p);
         const fen = (liveGame && liveGame.fen) || PUBLIC_SCREEN_START_FEN_;
         const miniBoardEl = document.getElementById("public-screen-mini-board");
-        if (miniBoardEl) renderBoardGrid(miniBoardEl, fenBoardToMatrix(fen), {});
+        if (miniBoardEl) renderPublicScreenBoardInto_(miniBoardEl, fen);
         const wrapEl = document.getElementById("public-screen-mini-board-wrap");
         if (wrapEl) wrapEl.addEventListener("click", () => openPublicScreenZoom_(p));
       }
@@ -8238,7 +8269,7 @@
         if (!miniBoardEl) return;
         const liveGame = publicScreenLiveGameFor_(p);
         const fen = (liveGame && liveGame.fen) || PUBLIC_SCREEN_START_FEN_;
-        renderBoardGrid(miniBoardEl, fenBoardToMatrix(fen), {});
+        renderPublicScreenBoardInto_(miniBoardEl, fen);
       }
 
       // Arma (una sola vez) y muestra el modal de "zoom" con el tablero de
@@ -8301,7 +8332,7 @@
         const liveGame = publicScreenLiveGameFor_(p);
         const fen = (liveGame && liveGame.fen) || PUBLIC_SCREEN_START_FEN_;
         const boardEl = document.getElementById("public-screen-zoom-board");
-        if (boardEl) renderBoardGrid(boardEl, fenBoardToMatrix(fen), {});
+        if (boardEl) renderPublicScreenBoardInto_(boardEl, fen);
       }
 
       function renderPublicScreen(state) {
