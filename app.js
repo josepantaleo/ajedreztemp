@@ -5577,10 +5577,13 @@
             if (!tournamentMatchActive) {
               renderTournamentState(lastTournamentState);
             }
-            // Si hay una mesa abierta en el modal de zoom de la pantalla
-            // pública, la repintamos con el FEN recién llegado (esto no
-            // toca nada si el modal está cerrado: la función se sale sola
-            // si publicScreenZoomKey_ es null).
+            // Repintamos el tablerito de la mesa que se está mostrando
+            // ahora en el carrusel de la pantalla pública (si hay una),
+            // más el modal de zoom si está abierto (ver ambas funciones):
+            // así se ve la partida EN VIVO, no una foto congelada del
+            // momento en que se abrió la pantalla o del último cambio de
+            // carrusel.
+            refreshPublicScreenActiveMiniBoard_();
             renderPublicScreenZoomBoard_();
             handleLiveMatchUpdate(lastTournamentState);
           },
@@ -8215,6 +8218,27 @@
         if (miniBoardEl) renderBoardGrid(miniBoardEl, fenBoardToMatrix(fen), {});
         const wrapEl = document.getElementById("public-screen-mini-board-wrap");
         if (wrapEl) wrapEl.addEventListener("click", () => openPublicScreenZoom_(p));
+      }
+
+      // Repinta SOLO las piezas del tablerito ya presente en pantalla, sin
+      // reconstruir el resto de la tarjeta (badge, nombres, barra de
+      // progreso del carrusel). Antes, el tablerito solo se actualizaba
+      // cuando el carrusel cambiaba de mesa cada 10s -y si había una sola
+      // mesa en juego, ni eso: advancePublicScreenCycle_ no hace nada con
+      // una sola mesa, así que el tablero quedaba congelado en la posición
+      // del momento en que se abrió la pantalla pública. Esto se llama
+      // en cada jugada nueva (ver el listener de subscribeRoundGames) para
+      // que se vea la partida EN VIVO, jugada a jugada, sin esperar al
+      // próximo tick del carrusel.
+      function refreshPublicScreenActiveMiniBoard_() {
+        const games = publicScreenActiveGames_;
+        if (!games.length || publicScreenCycleIndex_ >= games.length) return;
+        const p = games[publicScreenCycleIndex_];
+        const miniBoardEl = document.getElementById("public-screen-mini-board");
+        if (!miniBoardEl) return;
+        const liveGame = publicScreenLiveGameFor_(p);
+        const fen = (liveGame && liveGame.fen) || PUBLIC_SCREEN_START_FEN_;
+        renderBoardGrid(miniBoardEl, fenBoardToMatrix(fen), {});
       }
 
       // Arma (una sola vez) y muestra el modal de "zoom" con el tablero de
